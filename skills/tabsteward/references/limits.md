@@ -45,12 +45,12 @@ AppleScript addresses "Google Chrome" by name and cannot pick a process. With a 
 
 ## How far the policy holds
 
-- The hook matches text in Bash commands. It stops accidents and page-driven injection, not obfuscated commands such as a path built from variables. It is not a sandbox.
+- The hook matches text in Bash commands. It ignores quotes, backslashes and case before matching, and refuses any mention of `~/.config/tabsteward`, except a lone `rm -r` of that whole folder, which asks the user first. It stops accidents and page-driven injection, not obfuscated commands: a path in a variable, a `cd` into Chrome's folder, a script file passed to `osascript`, or Python loading `chrome.py` indirectly all still pass. It is not a sandbox.
 - `disableAllHooks`, `plugin disable` and `TABSTEWARD_DEV` can each switch the guard off. It refuses Edit, Write and Bash that mention them, but that list is whack-a-mole. A hard wall needs managed settings.
-- Changing an existing policy needs a one-time grant, valid 15 minutes, created only when a user message starts with `/tabsteward:setup`.
-- The guard runs on every prompt and every Bash, Write and Edit call in every project. It can misfire on a compound command with `osascript` and any word `chrome` in it. Claude also cannot read the audit log through Bash, so the user reads it.
+- Changing an existing policy needs a one-time grant, valid 15 minutes, created only when a user message starts with `/tabsteward:setup`. `chrome.py` checks it as well as the hook, so a command the hook misses still cannot change a policy, unless the grant file is forged in a way the hook misses too. The first run, with no policy yet, has no such check.
+- The guard runs on every prompt and every Bash, Write and Edit call in every project. It can misfire on a compound command with `osascript` and any word `chrome` in it, on any `hooks/guard.py` or `setup-grant` in another project, and on writing to any file named `chrome.py` or `hooks/hooks.json`. Claude also cannot read the audit log through Bash, so the user reads it.
 - A hook deny under `bypassPermissions` is not confirmed by the docs. The guard denies changes there on a best-effort basis.
-- If `python3` is missing the hook cannot run. An error while the guard decides denies the call, but a crash before that point, such as a failed import, exits without blocking.
+- A guard that cannot run blocks the call: a crash or a missing `python3` exits 2 on PreToolUse. Tested in a headless session with a crashing guard. The cost is that without a working `python3`, every Bash, Write and Edit call is blocked in every project until the plugin is turned off by hand.
 - `windows` reads every profile's session file locally to infer profiles, but prints only what the policy allows.
 - Profile inference is a heuristic, so a window could be misattributed. Keep `allow_js` off and limit `allow_domains` where it matters.
 - The Chrome menu toggle is the hard off switch: with it off, no script can act on that profile.

@@ -34,6 +34,7 @@ CURSOR_PAUSE = 1.0    # seconds the overlay rests on the target before the click
 CONFIG = Path.home() / ".config/tabsteward"
 POLICY = CONFIG / "policy.json"
 GRANT = CONFIG / "setup-grant"
+GRANT_SECONDS = 900   # same value as hooks/guard.py, which cannot import this file
 AUDIT = CONFIG / "audit.jsonl"
 MUTATING = {"open", "goto", "activate", "click", "fill", "js", "close", "set-policy"}
 SETUP = {"setup-info", "set-policy"}  # the only commands that run before a policy exists
@@ -155,9 +156,20 @@ def require_single_chrome():
                    "was done. Ask the user to close the extra one. Do not close it yourself.")
 
 
+def require_grant():
+    """The hook only sees the text of a command, so changing a policy is checked here too."""
+    try:
+        fresh = time.time() - GRANT.stat().st_mtime < GRANT_SECONDS
+    except FileNotFoundError:
+        fresh = False
+    if POLICY.exists() and not fresh:
+        raise Fail("policy: changing it needs the user to type /tabsteward:setup")
+
+
 def gate(a):
     """Every command passes here before it touches Chrome."""
     if a.cmd == "set-policy":
+        require_grant()
         return
     require_single_chrome()
     if a.cmd in SETUP:
