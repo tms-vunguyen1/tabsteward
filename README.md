@@ -139,7 +139,7 @@ Claude runs these for you through the skill.
 - **Prompt injection is not fully solved.** The skill tells Claude to treat page content as data, and no hook can enforce that.
 - **One Chrome at a time.** AppleScript cannot choose between Chrome processes, so tabsteward stops if a second one is running, such as one started by chrome-devtools-mcp.
 - **Profile detection is inferred** from session files. Windows it cannot identify stay hidden and refused.
-- **Clicks are scripted.** Sites that require a real user gesture can ignore them, and native dialogs need you.
+- **Clicks are scripted.** Sites that require a real user gesture can ignore them, and native dialogs need you. `click` reports whether the page visibly changed and whether a dialog stopped the tab, but Claude still has to check the result.
 - **It adds a small cost everywhere.** While enabled, the guard starts `python3` on every prompt and every Bash, Write and Edit call, in every project. That took about 50 ms per call on the tested machine, about three quarters of it Python starting up. If `python3` stops working, those Bash, Write and Edit calls are blocked until you turn the plugin off yourself.
 
 See [tested limits](skills/tabsteward/references/limits.md) for the full list.
