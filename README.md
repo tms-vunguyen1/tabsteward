@@ -140,7 +140,7 @@ Claude runs these for you through the skill.
 - **One Chrome at a time.** AppleScript cannot choose between Chrome processes, so tabsteward stops if a second one is running, such as one started by chrome-devtools-mcp.
 - **Profile detection is inferred** from session files. Windows it cannot identify stay hidden and refused.
 - **Clicks are scripted.** Sites that require a real user gesture can ignore them, and native dialogs need you.
-- **It adds a small cost everywhere.** While enabled, the guard starts `python3` on every prompt and every Bash, Write and Edit call, in every project.
+- **It adds a small cost everywhere.** While enabled, the guard starts `python3` on every prompt and every Bash, Write and Edit call, in every project. That took about 50 ms per call on the tested machine, nearly all of it Python starting up.
 
 See [tested limits](skills/tabsteward/references/limits.md) for the full list.
 
@@ -151,6 +151,23 @@ python3 tests/test_chrome.py
 ```
 
 To edit the plugin with Claude, start it with `TABSTEWARD_DEV=1 claude`. That turns off the guard's deny rules for that session.
+
+## Update
+
+Check your version:
+
+```sh
+claude plugin list
+```
+
+Then update, in this order, and restart Claude Code:
+
+```sh
+claude plugin marketplace update tabsteward
+claude plugin update tabsteward@tabsteward
+```
+
+Run both. Without the first command, the second reports that you are on the latest version even when a newer one exists.
 
 ## Uninstall
 
