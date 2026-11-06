@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.7.0-f5b301" alt="Version 0.7.0">
+  <img src="https://img.shields.io/badge/version-0.7.1-f5b301" alt="Version 0.7.1">
   <img src="https://img.shields.io/badge/platform-macOS-5b3a29" alt="Platform: macOS">
   <img src="https://img.shields.io/badge/Claude%20Code-plugin-5b3a29" alt="Claude Code plugin">
   <img src="https://img.shields.io/badge/dependencies-none-f5b301" alt="No dependencies">
