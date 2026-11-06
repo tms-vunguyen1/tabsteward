@@ -176,6 +176,11 @@ class Guard(unittest.TestCase):
             self.assertEqual(self.run_guard("Bash", env=env, command=cmd), "ask")
             self.assertEqual(self.run_guard("Bash", env={**env, "TABSTEWARD_DEV": "1"}, command=cmd), "ask")
             self.assertEqual(self.run_guard("Bash", env=env, mode="bypassPermissions", command=cmd), "deny")
+            policy = Path(home) / ".config/tabsteward/policy.json"
+            policy.parent.mkdir(parents=True)
+            policy.write_text("{}")
+            self.assertEqual(self.run_guard("Bash", env=env, command=cmd), "deny")
+            self.assertEqual(self.run_guard("Bash", env={**env, "TABSTEWARD_DEV": "1"}, command=cmd), "ask")  # dev can forge a grant anyway
         self.assertIsNone(self.run_guard("Bash", command="python3 /x/scripts/chrome.py setup-info"))
 
     def test_changing_policy_needs_the_user_typed_grant(self):
@@ -295,6 +300,67 @@ class Guard(unittest.TestCase):
 
     def test_dev_mode_allows_editing_guard(self):
         self.assertIsNone(self.run_guard("Edit", env={"TABSTEWARD_DEV": "1"}, file_path="/p/tabsteward/hooks/guard.py", new_string="x"))
+
+
+class ClickEffect(unittest.TestCase):
+    before = {"url": "http://a/", "hash": 1}
+    still = {**before, "mark": True, "ran": True}
+
+    def effect(self, *polls):
+        """Each poll is a snapshot or an exception. The last one repeats until the time budget ends."""
+        polls = list(polls)
+        def poll(*_):
+            item = polls.pop(0) if len(polls) > 1 else polls[0]
+            if isinstance(item, Exception):
+                raise item
+            return item
+        with patch.object(chrome, "js_json", side_effect=poll), patch.object(chrome, "js"), \
+             patch.object(chrome, "EFFECT_SECONDS", 0.02), patch.object(chrome, "EFFECT_POLL", 0.001):
+            return chrome.click_effect("1", self.before)
+
+    def test_page_changed(self):
+        self.assertEqual(self.effect(self.still, {**self.still, "hash": 2}), "changed")
+
+    def test_navigated(self):
+        self.assertEqual(self.effect({**self.still, "url": "http://b/"}), "navigated")
+        self.assertEqual(self.effect({**self.still, "mark": False}), "navigated")
+
+    def test_nothing_seen(self):
+        self.assertEqual(self.effect(self.still), "none_seen")
+
+    def test_click_that_never_ran_is_not_reported_as_ignored(self):
+        self.assertEqual(self.effect({**self.still, "ran": False}), "pending")
+
+    def test_a_tab_that_stops_answering_is_blocked(self):
+        self.assertEqual(self.effect(chrome.Blocked("timed out")), "blocked")
+
+    def test_errors_while_navigating_are_transient(self):
+        self.assertEqual(self.effect(chrome.Fail("boom"), None, {**self.still, "hash": 2}), "changed")
+
+    def test_cleanup_failure_does_not_hide_a_landed_click(self):
+        with patch.object(chrome, "watch_click", return_value="navigated"), \
+             patch.object(chrome, "js", side_effect=chrome.Fail("gone")):
+            self.assertEqual(chrome.click_effect("1", self.before), "navigated")
+
+    def test_blocked_click_is_reported_not_raised(self):
+        a = SimpleNamespace(tab="1", selector="#b", within=None, expect=None, cursor=False)
+        done = {"clicked": True, "text": "x", "before": self.before}
+        with patch.object(chrome, "js_json", return_value=done), patch.object(chrome, "click_effect", return_value="blocked"):
+            result = chrome.cmd_click(a)
+        self.assertEqual(result["effect"], "blocked")
+        self.assertNotIn("before", result)
+
+    def test_refused_click_has_no_effect_check(self):
+        a = SimpleNamespace(tab="1", selector="#b", within=None, expect=None, cursor=False)
+        with patch.object(chrome, "js_json", return_value={"clicked": False, "reason": "disabled"}), \
+             patch.object(chrome, "click_effect") as effect:
+            chrome.cmd_click(a)
+        effect.assert_not_called()
+
+    def test_timeout_raises_blocked(self):
+        with patch.object(chrome.subprocess, "run", side_effect=subprocess.TimeoutExpired("osascript", 1)), \
+             self.assertRaises(chrome.Blocked):
+            chrome.osa("x")
 
 
 class OpenByProfile(unittest.TestCase):

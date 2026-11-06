@@ -19,6 +19,9 @@ APP = "Google Chrome"
 BINARY = f"/Applications/{APP}.app/Contents/MacOS/{APP}"
 USER_DATA = Path.home() / "Library/Application Support/Google/Chrome"
 TIMEOUT = 10          # seconds for one AppleScript call
+EFFECT_SECONDS = 2.5  # how long `click` watches for a change; outlasts the 1s timers of a background tab
+EFFECT_POLL = 0.3     # seconds between looks
+EFFECT_TIMEOUT = 2    # seconds a tab may take to answer a look before it counts as blocked
 READ_CHARS = 4000     # page text returned by `read`
 READ_ELEMENTS = 60    # interactive elements returned by `read`
 CURSOR_MS = 800       # overlay travel time
@@ -53,12 +56,17 @@ class Fail(Exception):
     pass
 
 
+class Blocked(Fail):
+    pass
+
+
 def osa(script, *args, timeout=TIMEOUT):
     try:
         r = subprocess.run(["osascript", "-", *args], input=script, capture_output=True,
                            text=True, timeout=timeout)
     except subprocess.TimeoutExpired:
-        raise Fail("timed out: a JavaScript dialog may be blocking this tab")
+        raise Blocked("timed out: the tab is not answering, most likely a JavaScript dialog. "
+                      "Ask the user to answer it, and do not retry.")
     if r.returncode:
         err = r.stderr.strip()
         if JS_OFF in err:
@@ -386,7 +394,19 @@ setTimeout(()=>{c.style.opacity='1';follow()},30);
 setTimeout(()=>{ring.style.opacity='1'},ms);
 return 'moving'})()"""
 
-CLICK_JS = """(()=>{
+SNAPSHOT_FN = """const snapshot=()=>{
+const d=document.documentElement.cloneNode(true);d.querySelectorAll('[id^="tabsteward-"]').forEach(n=>n.remove());
+d.removeAttribute('data-tabsteward-mark');d.removeAttribute('data-tabsteward-ran');
+const fields=[...document.querySelectorAll('input,select,textarea')].map(e=>e.type==='password'?'':e.checked+':'+e.value);
+const s=d.outerHTML+fields.join('\\n');let h=0;for(let i=0;i<s.length;i++)h=h*31+s.charCodeAt(i)|0;
+return {url:location.href,hash:h}};"""
+
+SNAPSHOT_JS = """(()=>{""" + SNAPSHOT_FN + """const r=document.documentElement;
+return JSON.stringify({...snapshot(),mark:r.hasAttribute('data-tabsteward-mark'),ran:r.hasAttribute('data-tabsteward-ran')})})()"""
+
+UNMARK_JS = """for(const n of ['mark','ran'])document.documentElement.removeAttribute('data-tabsteward-'+n)"""
+
+CLICK_JS = """(()=>{%(snapshot)s
 const c=document.getElementById('tabsteward-cursor'),ring=document.getElementById('tabsteward-ring');
 const clear=()=>{c&&c.remove();ring&&ring.remove()};
 const root=%(within)s?document.querySelector(%(within)s):document;
@@ -401,13 +421,14 @@ const r=e.getBoundingClientRect(),q=c&&c.getBoundingClientRect(),x=r.left+r.widt
 const arrived=c?Math.hypot(q.left-x,q.top-y)<8:undefined;
 if(c&&!matchMedia('(prefers-reduced-motion: reduce)').matches){
  c.firstChild.animate([{scale:1},{scale:.82},{scale:1}],{duration:220,easing:'ease-out'});
- const p=document.createElement('div');Object.assign(p.style,{position:'fixed',left:x-14+'px',top:y-14+'px',width:'28px',height:'28px',
+ const p=document.createElement('div');p.id='tabsteward-ripple';Object.assign(p.style,{position:'fixed',left:x-14+'px',top:y-14+'px',width:'28px',height:'28px',
   borderRadius:'999px',border:`3px solid ${%(color)s}`,zIndex:2147483646,pointerEvents:'none'});document.body.appendChild(p);
  p.animate([{transform:'scale(.3)',opacity:.9},{transform:'scale(3)',opacity:0}],{duration:560,easing:'ease-out'}).onfinish=()=>p.remove();
 }
-e.click();
+const before=snapshot(),root_el=document.documentElement;root_el.dataset.tabstewardMark='1';
+setTimeout(()=>{root_el.dataset.tabstewardRan='1';e.click()},0);  // deferred: alert() must not swallow this result
 if(c){setTimeout(()=>{c.style.opacity='0';if(ring)ring.style.opacity='0'},520);setTimeout(clear,760)}
-return JSON.stringify({clicked:true,matches:all.length,text:text.slice(0,120),cursor_arrived:arrived})})()"""
+return JSON.stringify({clicked:true,matches:all.length,text:text.slice(0,120),cursor_arrived:arrived,before})})()"""
 
 
 def cursor_js(selector, within):
@@ -418,6 +439,41 @@ def cursor_js(selector, within):
         "width": CURSOR_WIDTH, "height": CURSOR_HEIGHT, "tip_x": CURSOR_TIP_X, "tip_y": CURSOR_TIP_Y}
 
 
+def click_effect(tab, before):
+    effect = watch_click(tab, before)
+    if effect != "blocked":
+        try:
+            js(tab, UNMARK_JS, EFFECT_TIMEOUT)
+        except Fail:  # the click landed either way, so this must not read as a refusal
+            pass
+    return effect
+
+
+def watch_click(tab, before):
+    """What the page did after the click.
+
+    ponytail: compares snapshots, so a change that reverts between two looks is missed, and a page
+    that changes on its own reads as `changed`. Only `blocked` and a failed click are certain.
+    """
+    end, ran = time.time() + EFFECT_SECONDS, False
+    while time.time() < end:
+        time.sleep(EFFECT_POLL)
+        try:
+            now = js_json(tab, SNAPSHOT_JS, EFFECT_TIMEOUT)
+        except Blocked:
+            return "blocked"
+        except Fail:  # the page may be mid-navigation
+            continue
+        if not now:
+            continue
+        if not now["mark"] or now["url"] != before["url"]:
+            return "navigated"
+        ran = now["ran"]
+        if now["hash"] != before["hash"]:
+            return "changed"
+    return "none_seen" if ran else "pending"
+
+
 def cmd_click(a):
     sel, within = json.dumps(a.selector), json.dumps(a.within or "")
     cursor = "off"
@@ -426,7 +482,10 @@ def cmd_click(a):
         if cursor == "moving":
             time.sleep(CURSOR_MS / 1000 + CURSOR_PAUSE)
     result = js_json(a.tab, CLICK_JS % {"selector": sel, "within": within, "expect": json.dumps(a.expect or ""),
-                                         "color": json.dumps(CURSOR_COLOR)})
+                                         "color": json.dumps(CURSOR_COLOR), "snapshot": SNAPSHOT_FN})
+    before = result.pop("before", None)
+    if result["clicked"]:
+        result["effect"] = click_effect(a.tab, before)
     result["cursor"] = cursor  # "hidden": the overlay was skipped, the user saw nothing
     return result
 
@@ -543,7 +602,8 @@ def main():
         result = a.fn(a)
         if a.cmd in MUTATING:
             failed = isinstance(result, dict) and (result.get("clicked") is False or result.get("ok") is False)
-            audit(a, "no effect" if failed else "ok")
+            effect = result.get("effect") if isinstance(result, dict) else None
+            audit(a, "no effect" if failed else effect or "ok")
         print(json.dumps(result, ensure_ascii=False, indent=1))
     except Fail as e:
         if a.cmd in MUTATING:

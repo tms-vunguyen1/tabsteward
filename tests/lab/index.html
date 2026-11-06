@@ -4,6 +4,7 @@
 <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"></script></head><body>
 <h2>Browser Lab</h2>
 <section><button id=btn>normal</button> <button id=trusted>trusted only</button> <span id=hov>hover me</span></section>
+<section><button id=noop>ignored</button> <button id=trustonly>silent trusted only</button> <button id=dlg>alert</button> <button id=fetcher>fetch only</button> <button id=swap>on</button> <a id=nav href="/frame.html">link</a></section>
 <section><input type=password id=pw value=secret123><input id=plain placeholder=plain> <span id=keys></span></section>
 <section id=reactroot></section>
 <section><div id=ce contenteditable style="border:1px solid #888;min-height:24px"></div></section>
@@ -16,6 +17,10 @@
 <script>
 window.pageSecret='s3';const __o={};const L=new Proxy(__o,{set(t,k,v){t[k]=v;document.documentElement.dataset.log=JSON.stringify(t);return true}});
 btn.onclick=e=>{L.btn={trusted:e.isTrusted}};
+trustonly.onclick=e=>{if(e.isTrusted)trustonly.textContent='done'};
+dlg.onclick=()=>alert('lab');
+fetcher.onclick=()=>fetch('/frame.html');
+swap.onclick=()=>{swap.textContent=swap.textContent==='on'?'no':'on'};
 trusted.onclick=e=>{L.trustedOnly=e.isTrusted?'ACCEPTED':'REJECTED'};
 plain.addEventListener('keydown',e=>{L.key={key:e.key,trusted:e.isTrusted}});
 file.onchange=async()=>{L.file={name:file.files[0].name,text:await file.files[0].text()}};

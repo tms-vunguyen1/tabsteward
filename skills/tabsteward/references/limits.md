@@ -22,7 +22,7 @@ Prerequisite: **View > Developer > Allow JavaScript from Apple Events**, set per
 
 | Case | Result | Way around |
 |---|---|---|
-| Handler that checks `isTrusted` | Click is ignored, yet reported as dispatched | Ask the user to click |
+| Handler that checks `isTrusted` | Click is ignored. `effect` reads `none_seen` when the page does nothing visible | Ask the user to click |
 | Typing by key events | Event fires, no text appears | `fill` |
 | CSS `:hover` | Not triggered | None |
 | `showPicker()`, file dialog | Needs a real user gesture | Ask the user |
@@ -31,7 +31,7 @@ Prerequisite: **View > Developer > Allow JavaScript from Apple Events**, set per
 | Cross-origin iframe | `contentDocument` is null, `js` only reaches the main frame | Open the frame URL directly in its own tab |
 | Page JS variables | Scripts run in an isolated world: DOM shared, globals not | Read the DOM |
 | Promises as return value | Nothing returned | Write to the DOM, read in a second call |
-| `alert()` | Tab stops answering, shows as a timeout, cannot be dismissed by script | Ask the user, or `close` it if it is your tab |
+| `alert()` | Tab stops answering and cannot be dismissed by script. `click` returns `effect: blocked` after about 3 seconds, other tab commands time out after 10. `windows` and `close` still work | Ask the user, or `close` it if it is your tab |
 
 ## Single Chrome only
 
@@ -49,6 +49,8 @@ AppleScript addresses "Google Chrome" by name and cannot pick a process. With a 
 - `disableAllHooks`, `plugin disable` and `TABSTEWARD_DEV` can each switch the guard off. It refuses Edit, Write and Bash that mention them, but that list is whack-a-mole. A hard wall needs managed settings.
 - Changing an existing policy needs a one-time grant, valid 15 minutes, created only when a user message starts with `/tabsteward:setup`. `chrome.py` checks it as well as the hook, so a command the hook misses still cannot change a policy, unless the grant file is forged in a way the hook misses too. The first run, with no policy yet, has no such check.
 - The guard runs on every prompt and every Bash, Write and Edit call in every project. It can misfire on a compound command with `osascript` and any word `chrome` in it, on any `hooks/guard.py` or `setup-grant` in another project, and on writing to any file named `chrome.py` or `hooks/hooks.json`. Claude also cannot read the audit log through Bash, so the user reads it.
+- `click` compares page snapshots for up to 2.5 seconds. `none_seen` does not prove the click was ignored: a fetch, a download or a slower page looks the same. `changed` does not prove the click caused it, since pages change on their own. A change in a cross-origin frame is not seen, and a change that reverts between two looks is missed.
+- A Bash command that only quotes `chrome.py set-policy`, such as release notes in a heredoc, is still treated as a policy change, and quoting a browser command raises a prompt. No text rule can separate running from quoting. Write the text to a file first and pass the file, such as `--notes-file`. In a dev session the policy case asks instead of refusing.
 - A hook deny under `bypassPermissions` is not confirmed by the docs. The guard denies changes there on a best-effort basis.
 - A guard that cannot run blocks the call: a crash or a missing `python3` exits 2 on PreToolUse. Tested in a headless session with a crashing guard. The cost is that without a working `python3`, every Bash, Write and Edit call is blocked in every project until the plugin is turned off by hand.
 - `windows` reads every profile's session file locally to infer profiles, but prints only what the policy allows.
