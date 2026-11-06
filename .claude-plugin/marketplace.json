@@ -9,7 +9,7 @@
   "plugins": [
     {
       "name": "tabsteward",
-      "version": "0.7.5",
+      "version": "0.7.6",
       "source": "./",
       "description": "Drive your already-open, logged-in Google Chrome on macOS via AppleScript.",
       "license": "MIT"
