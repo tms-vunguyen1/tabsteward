@@ -50,7 +50,7 @@ AppleScript addresses "Google Chrome" by name and cannot pick a process. With a 
 - Changing an existing policy needs a one-time grant, valid 15 minutes, created only when a user message starts with `/tabsteward:setup`.
 - The guard runs on every prompt and every Bash, Write and Edit call in every project. It can misfire on a compound command with `osascript` and any word `chrome` in it. Claude also cannot read the audit log through Bash, so the user reads it.
 - A hook deny under `bypassPermissions` is not confirmed by the docs. The guard denies changes there on a best-effort basis.
-- If `python3` is missing the hook cannot run. Otherwise an internal guard error denies the call.
+- If `python3` is missing the hook cannot run. An error while the guard decides denies the call, but a crash before that point, such as a failed import, exits without blocking.
 - `windows` reads every profile's session file locally to infer profiles, but prints only what the policy allows.
 - Profile inference is a heuristic, so a window could be misattributed. Keep `allow_js` off and limit `allow_domains` where it matters.
 - The Chrome menu toggle is the hard off switch: with it off, no script can act on that profile.
