@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-marketplace.json",
+  "name": "tabsteward",
+  "description": "Local marketplace for the tabsteward plugin.",
+  "owner": {
+    "name": "Vu Nguyen",
+    "url": "https://github.com/tms-vunguyen1"
+  },
+  "plugins": [
+    {
+      "name": "tabsteward",
+      "version": "0.7.0",
+      "source": "./",
+      "description": "Drive your already-open, logged-in Google Chrome on macOS via AppleScript.",
+      "license": "MIT"
+    }
+  ]
+}

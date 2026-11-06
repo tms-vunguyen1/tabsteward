@@ -1,0 +1,12 @@
+{
+  "name": "tabsteward",
+  "version": "0.7.0",
+  "description": "Drive your already-open, logged-in Google Chrome on macOS via AppleScript, with no extension or debug port.",
+  "author": {
+    "name": "Vu Nguyen"
+  },
+  "license": "MIT",
+  "skills": "./skills",
+  "homepage": "https://github.com/tms-vunguyen1/tabsteward",
+  "repository": "https://github.com/tms-vunguyen1/tabsteward"
+}
