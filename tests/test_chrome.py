@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).parents[1] / "skills/tabsteward/scripts"))
 import chrome
 
 GUARD = Path(__file__).parents[1] / "hooks/guard.py"
+ENV = {k: v for k, v in os.environ.items() if k != "TABSTEWARD_DEV"}  # a dev session must not reach the guard under test
 
 
 class Profiles(unittest.TestCase):
@@ -127,7 +128,7 @@ class Setup(unittest.TestCase):
 
 class Guard(unittest.TestCase):
     def run_guard(self, tool, mode="auto", env=None, **tool_input):
-        r = subprocess.run([sys.executable, str(GUARD)], capture_output=True, text=True, env={**os.environ, **(env or {})},
+        r = subprocess.run([sys.executable, str(GUARD)], capture_output=True, text=True, env={**ENV, **(env or {})},
                            input=json.dumps({"tool_name": tool, "permission_mode": mode, "tool_input": tool_input}))
         return json.loads(r.stdout)["hookSpecificOutput"]["permissionDecision"] if r.stdout else None
 
@@ -157,7 +158,7 @@ class Guard(unittest.TestCase):
         with tempfile.TemporaryDirectory() as home:
             env = {"HOME": home}
             prompt = lambda text: subprocess.run([sys.executable, str(GUARD), "user-prompt"], text=True,
-                                                 capture_output=True, env={**os.environ, **env},
+                                                 capture_output=True, env={**ENV, **env},
                                                  input=json.dumps({"prompt": text}))
             self.assertEqual(self.run_guard("Bash", env=env, command=cmd), "ask")  # first run, no policy
             policy = Path(home) / ".config/tabsteward/policy.json"
@@ -178,7 +179,7 @@ class Guard(unittest.TestCase):
 
     def test_session_start_nudges_only_without_policy(self):
         with tempfile.TemporaryDirectory() as home:
-            env = {**os.environ, "HOME": home}
+            env = {**ENV, "HOME": home}
             run = lambda: subprocess.run([sys.executable, str(GUARD), "session-start"], capture_output=True,
                                          text=True, env=env).stdout
             self.assertIn("tabsteward:setup", run())
@@ -214,8 +215,15 @@ class Guard(unittest.TestCase):
     def test_bypass_mode_denies_changes(self):
         self.assertEqual(self.run_guard("Bash", mode="bypassPermissions", command="python3 chrome.py click 1 a"), "deny")
 
+    def test_hooks_ignore_the_session_python_environment(self):
+        hooks = json.loads((GUARD.parent / "hooks.json").read_text())["hooks"]
+        commands = [h["command"] for event in hooks.values() for entry in event for h in entry["hooks"]]
+        self.assertEqual(len(commands), 3)
+        for command in commands:
+            self.assertTrue(command.startswith("python3 -I "), command)
+
     def test_broken_input_fails_closed(self):
-        r = subprocess.run([sys.executable, str(GUARD)], input="not json", capture_output=True, text=True)
+        r = subprocess.run([sys.executable, str(GUARD)], input="not json", capture_output=True, text=True, env=ENV)
         self.assertEqual(json.loads(r.stdout)["hookSpecificOutput"]["permissionDecision"], "deny")
 
     def test_dev_mode_allows_editing_guard(self):
