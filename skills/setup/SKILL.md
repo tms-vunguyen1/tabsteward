@@ -12,9 +12,9 @@ The script is `../tabsteward/scripts/chrome.py`, relative to this skill's base d
 Claude may start this only when no policy exists. If a policy exists and the user did not type `/tabsteward:setup`, stop: `set-policy` will be denied, and that refusal is deliberate.
 
 1. Run `chrome.py setup-info`. It lists every Chrome profile and the current policy, if any.
-2. **Profiles.** Ask which profiles Claude may use. With up to 4 profiles use AskUserQuestion with `multiSelect: true`. With more, print a numbered list and ask them to reply with the numbers. Show name and email so same-named profiles can be told apart, and pass the `dir` to the command. Mention that a work or banking profile exposes everything logged in there, so a separate low-stakes profile is the safest choice.
-3. **Domains.** Ask whether to limit Claude to specific sites, such as `x.com`, which also covers subdomains. Any site is the other option. A list is safer.
-4. **JavaScript.** Ask whether to allow the `js` command, recommending no. It runs arbitrary code in logged-in pages, and `read`, `click` and `fill` cover most work without it.
+2. **Profiles.** Steps 2 to 4 each use their own AskUserQuestion call, one after the other, so the user picks answers instead of typing them. Do not print these questions as text. Use `multiSelect: true`, the profile name as the label, and the email and `dir` as the description, so same-named profiles can be told apart. A question holds 4 options at most, so with more than 4 profiles split them into pages: 3 profiles plus a `None on this page` option, one question per page, 4 pages per call, then another call for the rest. If nothing was picked, ask again. Pass the `dir` to the command. Mention that a work or banking profile exposes everything logged in there, so a separate low-stakes profile is the safest choice.
+3. **Domains.** Ask whether to limit Claude to specific sites or allow any site. A list is safer. If they want a list, ask them to type the domains, such as `x.com`, which also covers subdomains.
+4. **JavaScript.** Ask whether to allow the `js` command, with `No (Recommended)` as the first option. It runs arbitrary code in logged-in pages, and `read`, `click` and `fill` cover most work without it.
 5. Summarize the choices, then run:
 
    ```
