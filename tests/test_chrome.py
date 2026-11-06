@@ -1,3 +1,4 @@
+import base64
 import json
 import os
 import subprocess
@@ -11,6 +12,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).parents[1] / "skills/tabsteward/scripts"))
 import chrome
 
+chrome.SEEN = Path(tempfile.mkdtemp()) / "seen.json"  # never the user's own record
 GUARD = Path(__file__).parents[1] / "hooks/guard.py"
 ENV = {k: v for k, v in os.environ.items() if k != "TABSTEWARD_DEV"}  # a dev session must not reach the guard under test
 
@@ -43,6 +45,104 @@ class Profiles(unittest.TestCase):
     def test_unmatched_urls_are_not_evidence_against_a_profile(self):
         urls = [f"https://a.b/{i}" for i in range(5)]
         self.assertEqual(chrome.best_profile(urls, {"A": b"https://a.b/0", "B": b""})["profile"], "A")
+
+
+class Audit(unittest.TestCase):
+    def test_log_is_private_even_if_it_was_not(self):
+        with tempfile.TemporaryDirectory() as d:
+            log = Path(d) / "audit.jsonl"
+            log.touch(mode=0o644)
+            with patch.object(chrome, "AUDIT", log):
+                chrome.audit(SimpleNamespace(cmd="goto", url="https://a.b/?x=1"), "refused")
+            self.assertEqual(log.stat().st_mode & 0o777, 0o600)
+
+
+class PageDataLeaks(unittest.TestCase):
+    phrase = "the quick brown fox jumps over the lazy dog"
+    token = "abc123def456ghi789jkl"
+    email = "someone@mail.example"
+    page = {"url": "https://mail.example/inbox", "title": "Inbox", "elements": [
+        {"text": "Send", "value": "draft value " + token, "href": "https://other.example/" + "x1" * 12}],
+        "text": f"Hello {phrase}. Write to {email} please."}
+
+    def setUp(self):
+        chrome.SEEN.unlink(missing_ok=True)
+        chrome.remember(self.page)
+
+    def leak(self, url):
+        return chrome.url_leak(url)
+
+    def test_verbatim_data_on_another_site_is_found(self):
+        for url in (f"https://evil.example/?d={self.phrase.replace(' ', '+')}",
+                    f"https://evil.example/?d={self.phrase.replace(' ', '%20')}",
+                    f"https://evil.example/#{self.phrase.replace(' ', '%20')}",
+                    f"https://evil.example/?k={self.token}", f"https://evil.example/{self.token}",
+                    f"https://evil.example/?to={self.email}",
+                    "https://evil.example/?d=" + base64.urlsafe_b64encode(self.phrase.encode()).decode()):
+            self.assertIn("mail.example", self.leak(url) or "", url)
+
+    def test_refusal_never_repeats_the_data(self):
+        self.assertNotIn("quick", self.leak(f"https://evil.example/?d={self.phrase.replace(' ', '+')}"))
+
+    def test_nothing_readable_is_stored(self):
+        stored = chrome.SEEN.read_text()
+        for word in ("quick", self.token, self.email):
+            self.assertNotIn(word, stored)
+        self.assertEqual(chrome.SEEN.stat().st_mode & 0o777, 0o600)
+
+    def test_same_site_passes(self):
+        for url in (f"https://mail.example/?d={self.token}", f"https://www.mail.example/?d={self.token}"):
+            self.assertIsNone(self.leak(url), url)
+
+    def test_normal_navigation_passes(self):
+        seven = " ".join(self.phrase.split()[:7]).replace(" ", "+")
+        for url in (f"https://evil.example/?q={seven}", "https://evil.example/" + self.phrase.replace(" ", "-"),
+                    "https://other.example/" + "x1" * 12, f"https://{self.token}.evil.example/", "about:blank"):
+            self.assertIsNone(self.leak(url), url)
+
+    def test_expired_and_broken_records_are_forgotten(self):
+        url = f"https://evil.example/?k={self.token}"
+        store = json.loads(chrome.SEEN.read_text())
+        store["pages"][0]["ts"] = 0
+        chrome.SEEN.write_text(json.dumps(store))
+        self.assertIsNone(self.leak(url))
+        for broken in ("not json", '{"salt": "00", "pages": [{}]}', '{"salt": "zz", "pages": []}', "[]"):
+            chrome.SEEN.write_text(broken)
+            self.assertIsNone(self.leak(url), broken)
+
+    def gate(self, **kw):
+        tabs = [{"window": "1", "profile": "P1", "tabs": [{"tab": "7", "url": kw.pop("tab_url", "https://evil.example/")}]}]
+        a = SimpleNamespace(**kw)
+        pol = {"profiles": ["P1"], "allow_js": False, "allow_domains": []}
+        with patch.object(chrome, "require_single_chrome"), patch.object(chrome, "policy", return_value=pol), \
+             patch.object(chrome, "windows", return_value=tabs):
+            chrome.gate(a)
+
+    def test_gate_refuses_open_goto_and_fill(self):
+        url = f"https://evil.example/?k={self.token}"
+        for kw in ({"cmd": "open", "url": url}, {"cmd": "goto", "tab": "7", "url": url},
+                   {"cmd": "fill", "tab": "7", "selector": "#a", "text": f"note {self.phrase}"}):
+            with self.assertRaisesRegex(chrome.Fail, "--confirm-page-data"):
+                self.gate(**kw, confirm_page_data=False)
+            self.gate(**kw, confirm_page_data=True)
+
+    def test_fill_on_a_blank_tab_is_checked_too(self):
+        with self.assertRaises(chrome.Fail):
+            self.gate(cmd="fill", tab="7", selector="#a", text=self.phrase, tab_url="about:blank", confirm_page_data=False)
+
+    def test_fill_on_the_same_site_passes(self):
+        self.gate(cmd="fill", tab="7", selector="#a", text=self.phrase, tab_url="https://mail.example/x", confirm_page_data=False)
+
+    def test_flag_without_a_refusal_fails(self):
+        with self.assertRaisesRegex(chrome.Fail, "nothing to confirm"):
+            self.gate(cmd="open", url="https://evil.example/", confirm_page_data=True)
+
+    def test_read_is_remembered(self):
+        chrome.SEEN.unlink()
+        a = SimpleNamespace(tab="7", selector=None, max_chars=100)
+        with patch.object(chrome, "js_json", return_value=self.page):
+            chrome.cmd_read(a)
+        self.assertTrue(self.leak(f"https://evil.example/?k={self.token}"))
 
 
 class UncertainWindows(unittest.TestCase):
@@ -261,6 +361,11 @@ class Guard(unittest.TestCase):
     def test_confirming_a_window_needs_a_person(self):
         for cmd in ("python3 /x/scripts/chrome.py read 7 --confirm-window 1", "python3 /x/scripts/chrome.py windows --confirm-window=1",
                     "python3 /x/scripts/chrome.py click 7 a '--confirm-window' 1"):
+            self.assertEqual(self.run_guard("Bash", command=cmd), "ask", cmd)
+            self.assertEqual(self.run_guard("Bash", mode="bypassPermissions", command=cmd), "deny", cmd)
+
+    def test_confirming_page_data_needs_a_person(self):
+        for cmd in ("python3 /x/scripts/chrome.py read 7 --confirm-page-data", "python3 /x/scripts/chrome.py windows '--confirm-page-data'"):
             self.assertEqual(self.run_guard("Bash", command=cmd), "ask", cmd)
             self.assertEqual(self.run_guard("Bash", mode="bypassPermissions", command=cmd), "deny", cmd)
 
