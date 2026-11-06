@@ -140,7 +140,7 @@ Claude runs these for you through the skill.
 - **One Chrome at a time.** AppleScript cannot choose between Chrome processes, so tabsteward stops if a second one is running, such as one started by chrome-devtools-mcp.
 - **Profile detection is inferred** from session files. Windows it cannot identify stay hidden and refused.
 - **Clicks are scripted.** Sites that require a real user gesture can ignore them, and native dialogs need you.
-- **It adds a small cost everywhere.** While enabled, the guard starts `python3` on every prompt and every Bash, Write and Edit call, in every project. That took about 50 ms per call on the tested machine, about three quarters of it Python starting up.
+- **It adds a small cost everywhere.** While enabled, the guard starts `python3` on every prompt and every Bash, Write and Edit call, in every project. That took about 50 ms per call on the tested machine, about three quarters of it Python starting up. If `python3` stops working, those Bash, Write and Edit calls are blocked until you turn the plugin off yourself.
 
 See [tested limits](skills/tabsteward/references/limits.md) for the full list.
 
@@ -176,7 +176,7 @@ claude plugin uninstall tabsteward@tabsteward
 claude plugin marketplace remove tabsteward
 ```
 
-Your policy and audit log remain in `~/.config/tabsteward/`. Delete that folder to remove them, and turn off the Chrome setting in each profile.
+Your policy and audit log remain in `~/.config/tabsteward/`. Delete that folder to remove them, or let Claude do it after you approve the prompt, and turn off the Chrome setting in each profile.
 
 ## Credits
 

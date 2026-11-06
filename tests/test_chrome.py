@@ -102,6 +102,23 @@ class Setup(unittest.TestCase):
                 self.run_set(tmp)
             self.assertFalse((tmp / "setup-grant").exists())
 
+    def test_changing_a_policy_needs_a_fresh_grant_however_it_was_invoked(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            grant = tmp / "setup-grant"
+            a = SimpleNamespace(cmd="set-policy")
+            with patch.object(chrome, "POLICY", tmp / "policy.json"), patch.object(chrome, "GRANT", grant):
+                chrome.gate(a)  # first run, no policy yet
+                (tmp / "policy.json").write_text("{}")
+                with self.assertRaises(chrome.Fail):
+                    chrome.gate(a)
+                grant.touch()
+                chrome.gate(a)
+                os.utime(grant, (0, 0))
+                with self.assertRaises(chrome.Fail):
+                    chrome.gate(a)
+        self.assertIn(f"GRANT_SECONDS = {chrome.GRANT_SECONDS}\n", GUARD.read_text())
+
     def test_rejects_unknown_profile_and_bad_domain(self):
         with tempfile.TemporaryDirectory() as d:
             for kw in ({"profile": ["Nope"]}, {"domain": ["https://x.com/"]}, {"domain": ["*"]}):
@@ -137,12 +154,20 @@ class Guard(unittest.TestCase):
                     'open -na "Google Chrome" --args --profile-directory=X',
                     '"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --new-window',
                     'sqlite3 ~/Library/Application\\ Support/Google/Chrome/Default/Cookies .dump',
-                    "python3 -c 'import chrome; chrome.js(1, \"x\")'"):
+                    "python3 -c 'import chrome; chrome.js(1, \"x\")'",
+                    "open -b com.google.Chrome https://a.b",
+                    "echo 'tell application \"Google Chrome\" to quit' | osascript"):
             self.assertEqual(self.run_guard("Bash", command=cmd), "deny", cmd)
 
     def test_mutating_asks(self):
         for sub in ("open https://a.b --profile V", "click 1 '#b'", "fill 1 '#a' x", "js 1 --code x", "close 1", "goto 1 https://a.b"):
             self.assertEqual(self.run_guard("Bash", command=f"python3 /x/scripts/chrome.py {sub}"), "ask", sub)
+
+    def test_spelling_does_not_dodge_the_gate(self):
+        for cmd in ("python3 /x/scripts/chrome.py 'click' 1 a", 'python3 /x/scripts/chrome.py "fill" 1 a b',
+                    "python3 /x/scripts/chrome.py \\\n  click 1 a", "python3 /x/scripts/CHROME.PY click 1 a",
+                    "python3 /x/scripts/chrome.py 'set-policy' --profile P1"):
+            self.assertEqual(self.run_guard("Bash", env={"HOME": "/nonexistent"}, command=cmd), "ask", cmd)
 
     def test_set_policy_asks_and_needs_a_human(self):
         cmd = "python3 /x/scripts/chrome.py set-policy --profile P1 --allow-js"
@@ -165,6 +190,7 @@ class Guard(unittest.TestCase):
             policy.parent.mkdir(parents=True)
             policy.write_text("{}")
             self.assertEqual(self.run_guard("Bash", env=env, command=cmd), "deny")
+            self.assertEqual(self.run_guard("Bash", env=env, command=cmd.replace("set-policy", "'set-policy'")), "deny")
             prompt("please run /tabsteward:setup for me")
             self.assertEqual(self.run_guard("Bash", env=env, command=cmd), "deny")
             prompt("/tabsteward:setup")
@@ -176,6 +202,9 @@ class Guard(unittest.TestCase):
     def test_grant_cannot_be_forged(self):
         self.assertEqual(self.run_guard("Bash", command="touch ~/.config/tabsteward/setup-grant"), "deny")
         self.assertEqual(self.run_guard("Write", file_path="~/.config/tabsteward/setup-grant", content=""), "deny")
+        for cmd in ("cd ~/.config/tabsteward && touch setup-grant", "cd ~/.config/tabsteward && echo x > policy.json",
+                    "cat ~/.config/tabsteward/polic*", "cat ~/.config/TabSteward/policy.json", "touch setup-grant"):
+            self.assertEqual(self.run_guard("Bash", command=cmd), "deny", cmd)
 
     def test_session_start_nudges_only_without_policy(self):
         with tempfile.TemporaryDirectory() as home:
@@ -196,13 +225,42 @@ class Guard(unittest.TestCase):
 
     def test_protected_files_denied(self):
         for path in ("~/.config/tabsteward/policy.json", "/p/tabsteward/hooks/guard.py",
-                     "/p/tabsteward/skills/tabsteward/scripts/chrome.py"):
+                     "/p/tabsteward/skills/tabsteward/scripts/chrome.py",
+                     "~/.config/TabSteward/Policy.JSON", "~/.config/tabsteward/x/../policy.json",
+                     "/h/.claude/plugins/cache/tabsteward/tabsteward/0.7.1/hooks/guard.py",
+                     "/h/.claude/plugins/cache/tabsteward/tabsteward/0.7.1/skills/tabsteward/scripts/chrome.py",
+                     str(GUARD), str(GUARD.with_name("hooks.json"))):
             self.assertEqual(self.run_guard("Edit", file_path=path, new_string="x"), "deny", path)
         self.assertEqual(self.run_guard("Bash", command="sed -i '' s/false/true/ ~/.config/tabsteward/policy.json"), "deny")
+        for cmd in ("cd /x/tabsteward/0.7.1 && echo x >> hooks/guard.py", "echo x >> /x/scripts/chrome.py",
+                    "cp /tmp/evil.py /x/scripts/chrome.py", "sed -i '' s/a/b/ /x/scripts/chrome.py",
+                    "cd /x/tabsteward/0.7.1 && echo x >> hooks/hooks.json", "cd /x/tabsteward/0.7.1 && rm hooks/hooks.json"):
+            self.assertEqual(self.run_guard("Bash", command=cmd), "deny", cmd)
+        self.assertIsNone(self.run_guard("Bash", command="python3 /x/scripts/chrome.py read 1 > /tmp/page.txt"))
         self.assertEqual(self.run_guard("Edit", file_path="/h/.claude/settings.json", new_string='"disableAllHooks": true'), "deny")
+
+    def test_deleting_the_config_folder_needs_a_person(self):
+        for cmd in ("rm -rf ~/.config/tabsteward", 'rm -rf "$HOME/.config/tabsteward/"', f"rm -r {Path.home()}/.config/tabsteward"):
+            self.assertEqual(self.run_guard("Bash", command=cmd), "ask", cmd)
+        self.assertEqual(self.run_guard("Bash", mode="bypassPermissions", command="rm -rf ~/.config/tabsteward"), "deny")
+        for cmd in ("rm -rf ~/.config/tabsteward && touch x", "rm -rf ~/.config/tabsteward/*", "rm ~/.config/tabsteward/policy.json"):
+            self.assertEqual(self.run_guard("Bash", command=cmd), "deny", cmd)
+
+    def test_symlink_to_the_config_folder_is_followed(self):
+        with tempfile.TemporaryDirectory() as home:
+            config = Path(home).resolve() / ".config/tabsteward"
+            config.mkdir(parents=True)
+            link = Path(home) / "innocent"
+            link.symlink_to(config)
+            self.assertEqual(self.run_guard("Write", file_path=str(link / "policy.json"), content="{}"), "deny")
 
     def test_guard_cannot_be_switched_off(self):
         self.assertEqual(self.run_guard("Bash", command="claude plugin disable tabsteward@tabsteward"), "deny")
+        for cmd in ("claude plugin disable --scope user tabsteward@tabsteward", "claude plugin marketplace remove tabsteward",
+                    """echo '{"enabledPlugins":{"tabsteward@tabsteward":false}}' > ~/.claude/settings.json"""):
+            self.assertEqual(self.run_guard("Bash", command=cmd), "deny", cmd)
+        self.assertEqual(self.run_guard("Edit", file_path="/h/.claude/settings.json",
+                                        new_string='"tabsteward@tabsteward": false'), "deny")
         self.assertEqual(self.run_guard("Edit", file_path="/h/.claude/settings.json",
                                         new_string='"env": {"TABSTEWARD_DEV": "1"}'), "deny")
 
@@ -221,6 +279,15 @@ class Guard(unittest.TestCase):
         self.assertEqual(len(commands), 3)
         for command in commands:
             self.assertTrue(command.startswith("python3 -I "), command)
+
+    def test_a_guard_that_cannot_start_blocks_the_tool(self):
+        entry = json.loads((GUARD.parent / "hooks.json").read_text())["hooks"]["PreToolUse"][0]
+        with tempfile.TemporaryDirectory() as root:
+            (Path(root) / "hooks").mkdir()
+            (Path(root) / "hooks/guard.py").write_text("import a_module_that_is_not_there\n")  # exits 1, which does not block
+            r = subprocess.run(["sh", "-c", entry["hooks"][0]["command"]], capture_output=True, text=True,
+                               env={**ENV, "CLAUDE_PLUGIN_ROOT": root}, input="{}")
+        self.assertEqual(r.returncode, 2)
 
     def test_broken_input_fails_closed(self):
         r = subprocess.run([sys.executable, str(GUARD)], input="not json", capture_output=True, text=True, env=ENV)

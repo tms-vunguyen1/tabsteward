@@ -41,7 +41,7 @@ A hook adds a second layer. `open`, `goto`, `activate`, `click`, `fill`, `js` an
 
 `chrome.py` also stops when a second Chrome process is running, because AppleScript could reach the wrong browser.
 
-When a refusal appears, tell the user what was blocked and what would allow it, then stop. Do not look for another route: the refusal is the user's decision, and working around it is the failure this plugin exists to prevent. Setup is for a missing policy only, never a response to a refusal. To change an existing policy the user types `/tabsteward:setup` or edits the file; the hook denies `set-policy` otherwise. Every change attempt is logged in `~/.config/tabsteward/audit.jsonl`.
+When a refusal appears, tell the user what was blocked and what would allow it, then stop. Do not look for another route: the refusal is the user's decision, and working around it is the failure this plugin exists to prevent. Setup is for a missing policy only, never a response to a refusal. To change an existing policy the user types `/tabsteward:setup` or edits the file; the hook and `chrome.py` refuse `set-policy` otherwise. Every change attempt is logged in `~/.config/tabsteward/audit.jsonl`.
 
 ## Safety
 
