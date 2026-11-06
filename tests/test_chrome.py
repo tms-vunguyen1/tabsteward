@@ -23,11 +23,100 @@ class Profiles(unittest.TestCase):
         self.assertIsNone(chrome.needle("chrome://newtab/"))
 
     def test_most_matches_wins(self):
-        self.assertEqual(chrome.best_profile(["https://x.com/home", "https://teams.example/"], self.blobs), "B")
+        self.assertEqual(chrome.best_profile(["https://x.com/home", "https://teams.example/"], self.blobs)["uncertain"], "B")
+        urls = ["https://x.com/home", "https://teams.example/", "https://b.example/"]
+        blobs = {"A": self.blobs["A"], "B": self.blobs["B"] + b" https://b.example/"}
+        self.assertEqual(chrome.best_profile(urls, blobs)["profile"], "B")
 
     def test_tie_or_no_match_is_unknown(self):
-        self.assertIsNone(chrome.best_profile(["https://x.com/home"], self.blobs))
-        self.assertIsNone(chrome.best_profile(["chrome://newtab/"], self.blobs))
+        self.assertIsNone(chrome.best_profile(["https://x.com/home"], self.blobs)["profile"])
+        self.assertIsNone(chrome.best_profile(["chrome://newtab/"], self.blobs)["profile"])
+
+    def test_close_runner_up_is_uncertain(self):
+        urls = [f"https://a.b/{i}" for i in range(3)]
+        two_to_one = {"A": b"https://a.b/0 https://a.b/1", "B": b"https://a.b/0"}
+        self.assertEqual(chrome.best_profile(urls, two_to_one),
+                         {"profile": None, "uncertain": "A", "hits": 2, "of": 3, "runner_up": 1})
+        three_to_one = {"A": b"https://a.b/0 https://a.b/1 https://a.b/2", "B": b"https://a.b/0"}
+        self.assertEqual(chrome.best_profile(urls, three_to_one)["profile"], "A")
+
+    def test_unmatched_urls_are_not_evidence_against_a_profile(self):
+        urls = [f"https://a.b/{i}" for i in range(5)]
+        self.assertEqual(chrome.best_profile(urls, {"A": b"https://a.b/0", "B": b""})["profile"], "A")
+
+
+class UncertainWindows(unittest.TestCase):
+    pol = {"profiles": ["P1"], "allow_js": False, "allow_domains": []}
+    tabs = [{"tab": "7", "url": "https://a.b/", "active": True, "title": "t"}]
+
+    def window(self, guess="P1"):
+        return {"window": "1", "tabs": self.tabs, "uncertain": guess, "profile": None,
+                "match": {"hits": 2, "of": 3, "runner_up": 1}}
+
+    def listed(self, row, confirm=None):
+        a = SimpleNamespace(profile=None, confirm_window=confirm)
+        with patch.object(chrome, "windows", return_value=[row]), \
+             patch.object(chrome, "allowed_profiles", return_value=[{"dir": "P1", "name": "Me", "email": "a@x"}]):
+            return chrome.cmd_windows(a)
+
+    def test_listing_hides_tabs_and_names_an_allowed_guess(self):
+        self.assertEqual(self.listed(self.window()),
+                         [{"window": "1", "profile": None, "tabs_hidden": 1, "uncertain": "P1"}])
+
+    def test_listing_never_names_a_guess_outside_the_policy(self):
+        self.assertEqual(self.listed(self.window("P9")), [{"window": "1", "profile": None, "tabs_hidden": 1}])
+
+    def run_windows(self, confirm, blobs):
+        rows = "\x1e".join(["1\x1f7\x1ftrue\x1fhttps://a.b/0\x1ft"]) + "\x1e"
+        with patch.object(chrome, "osa", return_value=rows), patch.object(chrome, "session_blobs", return_value=blobs), \
+             patch.object(chrome, "policy", return_value=self.pol):
+            return chrome.windows(confirm)
+
+    close = {"P1": b"https://a.b/0", "P2": b"https://a.b/0"}
+
+    def test_confirm_promotes_only_the_named_uncertain_window(self):
+        with patch.object(chrome, "best_profile", return_value={"profile": None, "uncertain": "P1", "hits": 2, "of": 3, "runner_up": 1}):
+            self.assertIsNone(self.run_windows(None, self.close)[0]["profile"])
+            self.assertEqual(self.run_windows("1", self.close)[0]["profile"], "P1")
+
+    def test_confirm_on_a_window_that_is_not_uncertain_fails(self):
+        for match in ({"profile": "P1", "uncertain": None, "hits": 3, "of": 3, "runner_up": 0},
+                      {"profile": None, "uncertain": "P9", "hits": 2, "of": 3, "runner_up": 1},
+                      {"profile": None, "uncertain": None, "hits": 0, "of": 1, "runner_up": 0}):
+            with patch.object(chrome, "best_profile", return_value=match), self.assertRaises(chrome.Fail):
+                self.run_windows("1", self.close)
+        with patch.object(chrome, "best_profile", return_value={"profile": None, "uncertain": "P1", "hits": 2, "of": 3, "runner_up": 1}), \
+             self.assertRaises(chrome.Fail):
+            self.run_windows("99", self.close)
+
+    def test_authorize_needs_the_confirmation_and_an_allowed_guess(self):
+        def windows(confirm=None):
+            w = self.window()
+            if confirm == "1":
+                w["profile"] = "P1"
+            return [w]
+        with patch.object(chrome, "windows", side_effect=windows):
+            with self.assertRaisesRegex(chrome.Fail, "--confirm-window 1"):
+                chrome.authorize("7", self.pol)
+            chrome.authorize("7", self.pol, "1")
+        with patch.object(chrome, "windows", return_value=[{**self.window("P9"), "profile": "P9"}]), self.assertRaises(chrome.Fail):
+            chrome.authorize("7", self.pol, "1")
+
+    def test_open_in_an_uncertain_window_needs_the_confirmation(self):
+        a = SimpleNamespace(url="https://a.b/", window="1", profile=None, confirm_window=None)
+        with patch.object(chrome, "windows", return_value=[self.window()]), patch.object(chrome, "policy", return_value=self.pol), \
+             self.assertRaisesRegex(chrome.Fail, "--confirm-window 1"):
+            chrome.cmd_open(a)
+        a.confirm_window = "1"
+        with patch.object(chrome, "windows", return_value=[{**self.window(), "profile": "P1"}]), \
+             patch.object(chrome, "policy", return_value=self.pol), patch.object(chrome, "osa", return_value="7"):
+            self.assertEqual(chrome.cmd_open(a), {"window": "1", "tab": "7"})
+
+    def test_flags_cannot_be_abbreviated(self):
+        with patch.object(sys, "argv", ["chrome.py", "read", "7", "--confirm", "1"]), patch.object(sys, "platform", "darwin"), \
+             patch("sys.stderr"), self.assertRaises(SystemExit) as ctx:
+            chrome.main()
+        self.assertEqual(ctx.exception.code, 2)
 
     def test_resolve_profile(self):
         known = [{"dir": "P1", "name": "Work", "email": "a@x"}, {"dir": "P2", "name": "Work", "email": "b@x"},
@@ -168,6 +257,12 @@ class Guard(unittest.TestCase):
                     "python3 /x/scripts/chrome.py \\\n  click 1 a", "python3 /x/scripts/CHROME.PY click 1 a",
                     "python3 /x/scripts/chrome.py 'set-policy' --profile P1"):
             self.assertEqual(self.run_guard("Bash", env={"HOME": "/nonexistent"}, command=cmd), "ask", cmd)
+
+    def test_confirming_a_window_needs_a_person(self):
+        for cmd in ("python3 /x/scripts/chrome.py read 7 --confirm-window 1", "python3 /x/scripts/chrome.py windows --confirm-window=1",
+                    "python3 /x/scripts/chrome.py click 7 a '--confirm-window' 1"):
+            self.assertEqual(self.run_guard("Bash", command=cmd), "ask", cmd)
+            self.assertEqual(self.run_guard("Bash", mode="bypassPermissions", command=cmd), "deny", cmd)
 
     def test_set_policy_asks_and_needs_a_human(self):
         cmd = "python3 /x/scripts/chrome.py set-policy --profile P1 --allow-js"

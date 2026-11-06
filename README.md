@@ -122,7 +122,7 @@ Claude runs these for you through the skill.
 | Command | Purpose | Asks first |
 |---|---|---|
 | `profiles` | List allowed profiles | No |
-| `windows [--profile NAME]` | List windows and tabs | No |
+| `windows [--profile NAME]` | List windows and tabs. Any command on a window with an uncertain profile needs `--confirm-window ID` | No, but that flag asks |
 | `read TAB [--selector S]` | Read page text and interactive elements | No |
 | `wait TAB SELECTOR` | Wait for an element | No |
 | `open URL --profile NAME` | Open a tab in an existing window | Yes |
@@ -138,7 +138,7 @@ Claude runs these for you through the skill.
 - **The guard is a seatbelt, not a sandbox.** It matches text in Bash commands, so it stops accidents and page-driven injection, not deliberately disguised commands. Turning off the Chrome setting above is the real off switch.
 - **Prompt injection is not fully solved.** The skill tells Claude to treat page content as data, and no hook can enforce that.
 - **One Chrome at a time.** AppleScript cannot choose between Chrome processes, so tabsteward stops if a second one is running, such as one started by chrome-devtools-mcp.
-- **Profile detection is inferred** from session files. Windows it cannot identify stay hidden and refused.
+- **Profile detection is inferred** from session files. Windows it cannot identify stay hidden and refused. A close call between two profiles stays hidden too, until you confirm it.
 - **Clicks are scripted.** Sites that require a real user gesture can ignore them, and native dialogs need you. `click` reports whether the page visibly changed and whether a dialog stopped the tab, but Claude still has to check the result.
 - **It adds a small cost everywhere.** While enabled, the guard starts `python3` on every prompt and every Bash, Write and Edit call, in every project. That took about 50 ms per call on the tested machine, about three quarters of it Python starting up. If `python3` stops working, those Bash, Write and Edit calls are blocked until you turn the plugin off yourself.
 
