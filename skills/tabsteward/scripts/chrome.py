@@ -19,6 +19,7 @@ APP = "Google Chrome"
 BINARY = f"/Applications/{APP}.app/Contents/MacOS/{APP}"
 USER_DATA = Path.home() / "Library/Application Support/Google/Chrome"
 TIMEOUT = 10          # seconds for one AppleScript call
+PROFILE_LEAD = 2      # URLs the best profile must lead a rival by, when there is one
 EFFECT_SECONDS = 2.5  # how long `click` watches for a change; outlasts the 1s timers of a background tab
 EFFECT_POLL = 0.3     # seconds between looks
 EFFECT_TIMEOUT = 2    # seconds a tab may take to answer a look before it counts as blocked
@@ -132,12 +133,19 @@ def check_url(url, pol):
         raise Fail(f"policy: {host} is not in allow_domains")
 
 
-def authorize(tab_id, pol):
-    for w in windows():
+def refuse_window(w, pol, what):
+    if w and w["profile"] is None and w.get("uncertain") in pol["profiles"]:
+        raise Fail(f"policy: window {w['window']} may belong to another profile. Ask the user, "
+                   f"and pass --confirm-window {w['window']} only if they confirm it")
+    raise Fail(f"policy: this {what} is outside the allowed profiles, or its profile is unknown")
+
+
+def authorize(tab_id, pol, confirm=None):
+    for w in windows(confirm):
         for t in w["tabs"]:
             if t["tab"] == str(tab_id):
                 if w["profile"] not in pol["profiles"]:
-                    raise Fail("policy: this tab is outside the allowed profiles, or its profile is unknown")
+                    refuse_window(w, pol, "tab")
                 check_url(t["url"], pol)
                 return
     raise Fail("tab not found: it was closed, list tabs again with `windows`")
@@ -146,7 +154,7 @@ def authorize(tab_id, pol):
 def audit(a, outcome):
     """Record what was attempted and how it ended, never what was typed."""
     entry = {"ts": datetime.now(timezone.utc).isoformat(timespec="seconds"), "cmd": a.cmd, "outcome": outcome}
-    for k in ("tab", "url", "selector", "window", "profile", "allow_js", "domain"):
+    for k in ("tab", "url", "selector", "window", "confirm_window", "profile", "allow_js", "domain"):
         if getattr(a, k, None):
             entry[k] = getattr(a, k)
     if a.cmd == "fill":
@@ -186,7 +194,7 @@ def gate(a):
     if a.cmd == "js" and not pol["allow_js"]:
         raise Fail('policy: `js` is off. The user can set "allow_js": true in their policy')
     if getattr(a, "tab", None):
-        authorize(a.tab, pol)
+        authorize(a.tab, pol, getattr(a, "confirm_window", None))
     if getattr(a, "url", None):
         check_url(a.url, pol)
 
@@ -201,12 +209,18 @@ def needle(url):
 
 
 def best_profile(urls, blobs):
-    """Profile dir whose session mentions the most of `urls`; None on no match or a tie."""
+    """Profile dir whose session mentions the most of `urls`; None on no match or a tie.
+
+    A narrow lead over a rival is `uncertain`, not a match. URLs found in no session say
+    nothing against a profile: they are usually tabs opened since Chrome last saved.
+    """
     needles = {n for n in map(needle, urls) if n}
     scores = {d: sum(n in blob for n in needles) for d, blob in blobs.items()}
-    top = max(scores.values(), default=0)
-    winners = [d for d, s in scores.items() if s == top]
-    return winners[0] if top and len(winners) == 1 else None
+    top, runner_up = (sorted(scores.values(), reverse=True) + [0, 0])[:2]
+    best = max(scores, key=scores.get) if top and top != runner_up else None
+    narrow = best and runner_up and top - runner_up < PROFILE_LEAD
+    return {"profile": None if narrow else best, "uncertain": best if narrow else None,
+            "hits": top, "of": len(needles), "runner_up": runner_up}
 
 
 def profiles():
@@ -225,7 +239,7 @@ def session_blobs():
     return blobs
 
 
-def windows():
+def windows(confirm=None):
     script = f'''set out to ""
 set f to character id 31
 tell application "{APP}"
@@ -245,7 +259,14 @@ return out'''
             {"tab": tid, "active": active == "true", "url": url, "title": title})
     blobs = session_blobs()
     for w in found.values():
-        w["profile"] = best_profile([t["url"] for t in w["tabs"]], blobs)  # heuristic
+        m = best_profile([t["url"] for t in w["tabs"]], blobs)  # heuristic
+        w["profile"], w["uncertain"] = m["profile"], m["uncertain"]
+        w["match"] = {k: m[k] for k in ("hits", "of", "runner_up")}
+    if confirm:
+        w = found.get(str(confirm))
+        if not (w and w["uncertain"] in policy()["profiles"]):
+            raise Fail(f"window {confirm} is not uncertain: --confirm-window is only for a window `windows` marks so")
+        w["profile"] = w["uncertain"]
     return list(found.values())
 
 
@@ -296,11 +317,14 @@ def cmd_windows(a):
     if a.profile:
         allowed = {resolve_profile(a.profile, allowed_profiles())["dir"]}
     shown = []
-    for w in windows():
+    for w in windows(a.confirm_window):
         if w["profile"] in allowed:
             shown.append(w)
         elif w["profile"] is None:  # may hold another profile's tabs, so show no content
-            shown.append({"window": w["window"], "profile": None, "tabs_hidden": len(w["tabs"])})
+            row = {"window": w["window"], "profile": None, "tabs_hidden": len(w["tabs"])}
+            if w.get("uncertain") in allowed:
+                row["uncertain"] = w["uncertain"]
+            shown.append(row)
     return shown
 
 
@@ -312,14 +336,18 @@ def cmd_open(a):
         match = [w for w in wins if w["profile"] == p["dir"]]
         if not match:
             if any(w["profile"] is None for w in wins):
-                raise Fail("a window's profile is unknown, it may be this one: pass --window ID")
+                raise Fail("a window's profile is unknown, it may be this one: pass --window ID, "
+                           "with --confirm-window ID if `windows` marks it uncertain")
             # Chrome makes a new window here even if one exists, so this is the no-window path only.
             subprocess.Popen([BINARY, f"--profile-directory={p['dir']}", a.url],
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             return {"launched": p["dir"], "note": "new window, list tabs with `windows`"}
         window = match[0]["window"]
-    elif not any(w["window"] == str(window) and w["profile"] in policy()["profiles"] for w in windows()):
-        raise Fail("policy: this window is outside the allowed profiles, or its profile is unknown")
+    else:
+        pol = policy()
+        w = next((w for w in windows(getattr(a, "confirm_window", None)) if w["window"] == str(window)), None)
+        if not w or w["profile"] not in pol["profiles"]:
+            refuse_window(w, pol, "window")
     script = f'''on run argv
 tell application "{APP}"
 set t to make new tab at end of tabs of window id (item 1 of argv) with properties {{URL:item 2 of argv}}
@@ -539,7 +567,7 @@ def main():
         sys.exit(json.dumps({"error": "tabsteward only runs on macOS"}))
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
-    add = lambda name, fn: (lambda p: (p.set_defaults(fn=fn), p)[1])(sub.add_parser(name))
+    add = lambda name, fn: (lambda p: (p.set_defaults(fn=fn), p)[1])(sub.add_parser(name, allow_abbrev=False))
     add("setup-info", cmd_setup_info)
 
     p = add("set-policy", cmd_set_policy)
@@ -595,6 +623,10 @@ def main():
 
     p = add("close", cmd_close)
     p.add_argument("tab")
+
+    for name, p in sub.choices.items():
+        if name not in ("setup-info", "set-policy", "profiles"):
+            p.add_argument("--confirm-window", help="the user confirmed this uncertain window's profile")
 
     a = ap.parse_args()
     try:

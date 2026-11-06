@@ -29,6 +29,7 @@ PROTECTED_MENTION = "|".join((STATE, GUARD_FILES, WRITE_TO, ANTI_GUARD))
 PROTECTED_PATH = "|".join((STATE, GUARD_FILES, r"skills/tabsteward/scripts/chrome\.py$"))
 MUTATING = CHROME_PY + r"(open|goto|activate|click|fill|js|close)\b"
 SET_POLICY = CHROME_PY + r"set-policy\b"
+CONFIRM_WINDOW = r"--confirm-window\b"
 POLICY = Path.home() / ".config/tabsteward/policy.json"
 GRANT = POLICY.with_name("setup-grant")  # proof the user typed the setup command, consumed by set-policy
 GRANT_SECONDS = 900
@@ -74,13 +75,13 @@ def decide(event):
             return "ask", "tabsteward: this deletes your policy and audit log, and the next set-policy needs no grant"
         if found(PROTECTED_MENTION, text):
             return "deny", "tabsteward: the policy, audit log and guard are off limits"
-    setting = found(SET_POLICY, text)
-    if setting or found(MUTATING, text):
+    setting, confirming = found(SET_POLICY, text), found(CONFIRM_WINDOW, text)
+    if setting or confirming or found(MUTATING, text):
         if event.get("permission_mode") == "bypassPermissions":
             return "deny", "tabsteward: this needs a human, not bypass mode"
         if not DEV and setting and POLICY.exists() and not granted():  # a dev session can forge a grant anyway
             return "deny", f"tabsteward: changing a policy needs the user to type {SETUP_COMMAND}"
-        what = "change its policy" if setting else "change your browser"
+        what = "change its policy" if setting else "use a window whose profile is uncertain" if confirming else "change your browser"
         return "ask", f"tabsteward wants to {what}: {cmd[:300]}"
     return None
 

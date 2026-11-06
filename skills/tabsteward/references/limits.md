@@ -54,7 +54,7 @@ AppleScript addresses "Google Chrome" by name and cannot pick a process. With a 
 - A hook deny under `bypassPermissions` is not confirmed by the docs. The guard denies changes there on a best-effort basis.
 - A guard that cannot run blocks the call: a crash or a missing `python3` exits 2 on PreToolUse. Tested in a headless session with a crashing guard. The cost is that without a working `python3`, every Bash, Write and Edit call is blocked in every project until the plugin is turned off by hand.
 - `windows` reads every profile's session file locally to infer profiles, but prints only what the policy allows.
-- Profile inference is a heuristic, so a window could be misattributed. Keep `allow_js` off and limit `allow_domains` where it matters.
+- Profile inference is a heuristic, so a window could be misattributed. Keep `allow_js` off and limit `allow_domains` where it matters. A lead of under 2 URLs over a rival profile is treated as `uncertain`: tabs stay hidden and commands are refused until the user approves `--confirm-window`, once per command. A window with no rival is not flagged, however few URLs match, so a lone tab can still be wrong. The threshold has only been unit-tested and tried against a simulated rival: no real close call has been seen.
 - The Chrome menu toggle is the hard off switch: with it off, no script can act on that profile.
 
 ## Not tested
