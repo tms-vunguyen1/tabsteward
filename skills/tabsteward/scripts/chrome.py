@@ -46,6 +46,11 @@ SEEN_HOURS = 4        # how long a page's fingerprints count
 PHRASE_WORDS = 8      # consecutive words that make a phrase, shorter runs are ordinary quoting
 TOKEN = re.compile(r"[a-z0-9_-]{16,}")  # also needs a letter and a digit
 EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
+OPENED = CONFIG / "opened.json"  # tabs tabsteward opened, closed without asking for SEEN_HOURS
+SENSITIVE_WORDS = ("delete", "remove", "erase", "pay", "payment", "purchase", "buy", "checkout", "check out",
+                   "place order", "transfer", "send", "post", "publish", "xóa", "xoá", "thanh toán", "mua",
+                   "đặt hàng", "chuyển tiền", "chuyển khoản", "gửi", "đăng bài", "đăng tin")  # "đăng" alone is also log in
+SENSITIVE = r"(?<![\p{L}\p{N}])(?:" + "|".join(SENSITIVE_WORDS) + r")(?![\p{L}\p{N}])"  # JS regex, flags iu
 MUTATING = {"open", "goto", "activate", "click", "fill", "js", "close", "set-policy"}
 SETUP = {"setup-info", "set-policy"}  # the only commands that run before a policy exists
 DOMAIN = re.compile(r"[a-z0-9-]+(\.[a-z0-9-]+)+")
@@ -123,7 +128,7 @@ def policy():
     except ValueError:
         raise Fail(f"{POLICY} is not valid JSON: ask the user to fix it")
     return {"profiles": p.get("profiles") or [], "allow_js": p.get("allow_js") is True,
-            "allow_domains": p.get("allow_domains") or []}
+            "allow_domains": p.get("allow_domains") or [], "ask_sensitive": p.get("ask_sensitive") is not False}
 
 
 def check_url(url, pol):
@@ -181,10 +186,28 @@ def remember(page):
     store = seen_store()
     hashes = sorted({fingerprint(store["salt"], value) for _, value in marks(text)})
     store["pages"].append({"ts": time.time(), "host": urlsplit(page["url"]).hostname or "", "marks": hashes})
-    tmp = SEEN.with_suffix(f".{os.getpid()}.tmp")
+    write_private(SEEN, store)
+
+
+def write_private(path, data):
+    tmp = path.with_suffix(f".{os.getpid()}.tmp")
     tmp.touch(mode=0o600)
-    tmp.write_text(json.dumps(store), encoding="utf-8")
-    tmp.replace(SEEN)
+    tmp.write_text(json.dumps(data), encoding="utf-8")
+    tmp.replace(path)
+
+
+def opened_tabs():
+    """A broken or missing record is an empty one: closing then asks, which is the safe side."""
+    try:
+        fresh = time.time() - SEEN_HOURS * 3600  # Chrome reuses tab ids after a restart
+        return {tab: ts for tab, ts in json.loads(OPENED.read_text(encoding="utf-8")).items() if ts > fresh}
+    except (OSError, ValueError, TypeError, AttributeError):
+        return {}
+
+
+def note_opened(tab):
+    OPENED.parent.mkdir(parents=True, exist_ok=True)
+    write_private(OPENED, {**opened_tabs(), str(tab): time.time()})
 
 
 def find_leak(text, host, path=""):
@@ -235,9 +258,11 @@ def authorize(tab_id, pol, confirm=None):
 def audit(a, outcome):
     """Record what was attempted and how it ended, never what was typed."""
     entry = {"ts": datetime.now(timezone.utc).isoformat(timespec="seconds"), "cmd": a.cmd, "outcome": outcome}
-    for k in ("tab", "url", "selector", "window", "confirm_window", "profile", "allow_js", "domain"):
+    for k in ("tab", "url", "selector", "window", "confirm_window", "confirm_action", "profile", "allow_js", "domain"):
         if getattr(a, k, None):
             entry[k] = getattr(a, k)
+    if a.cmd == "set-policy":
+        entry["ask_sensitive"] = a.ask_sensitive
     if a.cmd == "fill":
         entry["chars"] = len(a.text)
     with AUDIT.open("a", encoding="utf-8") as f:
@@ -275,6 +300,13 @@ def gate(a):
     pol = policy()
     if a.cmd == "js" and not pol["allow_js"]:
         raise Fail('policy: `js` is off. The user can set "allow_js": true in their policy')
+    if a.cmd == "close":
+        ours, confirmed = str(a.tab) in opened_tabs(), a.confirm_action
+        if ours and confirmed:
+            raise Fail("nothing to confirm: --confirm-action is only for a command refused as hard to undo")
+        if pol.get("ask_sensitive", True) and not ours and not confirmed:
+            raise Fail("policy: tabsteward did not open this tab, so it may hold the user's work. Ask the user, "
+                       "and pass --confirm-action only if they want it closed")
     leak = None
     if getattr(a, "tab", None):
         current = authorize(a.tab, pol, getattr(a, "confirm_window", None))
@@ -385,7 +417,7 @@ def cmd_set_policy(a):
     bad = [d for d in domains if not DOMAIN.fullmatch(d)]
     if bad:
         raise Fail(f"not a bare domain: {bad}, use the form example.com")
-    new = {"profiles": a.profile, "allow_js": a.allow_js, "allow_domains": domains}
+    new = {"profiles": a.profile, "allow_js": a.allow_js, "allow_domains": domains, "ask_sensitive": a.ask_sensitive}
     CONFIG.mkdir(parents=True, exist_ok=True)
     tmp = POLICY.with_suffix(".tmp")
     tmp.write_text(json.dumps(new, indent=2) + "\n", encoding="utf-8")
@@ -446,7 +478,9 @@ set t to make new tab at end of tabs of window id (item 1 of argv) with properti
 return id of t
 end tell
 end run'''
-    return {"window": window, "tab": osa(script, str(window), a.url)}
+    tab = osa(script, str(window), a.url)
+    note_opened(tab)
+    return {"window": window, "tab": tab}
 
 
 def cmd_goto(a):
@@ -536,6 +570,10 @@ const e=all[0];if(!e){clear();return JSON.stringify({clicked:false,reason:'no ma
 const text=(e.innerText||e.getAttribute('aria-label')||e.value||'').trim();
 if(%(expect)s&&!text.includes(%(expect)s)){clear();
  return JSON.stringify({clicked:false,reason:'expected text not found',text:text.slice(0,120)})}
+const sensitive=new RegExp(%(sensitive)s,'iu').test(text.normalize('NFC').replace(/\\s+/g,' '));
+const stop = %(stop)s, confirmed = %(confirmed)s;
+if(sensitive&&stop||confirmed&&!sensitive){clear();
+ return JSON.stringify({clicked:false,reason:sensitive?'sensitive':'nothing to confirm'})}
 if(e.disabled||e.getAttribute('aria-disabled')==='true'){clear();
  return JSON.stringify({clicked:false,reason:'disabled'})}
 const r=e.getBoundingClientRect(),q=c&&c.getBoundingClientRect(),x=r.left+r.width/2,y=r.top+r.height/2;
@@ -602,8 +640,16 @@ def cmd_click(a):
         cursor = js(a.tab, cursor_js(sel, within))
         if cursor == "moving":
             time.sleep(CURSOR_MS / 1000 + CURSOR_PAUSE)
+    stop = policy()["ask_sensitive"] and not a.confirm_action
     result = js_json(a.tab, CLICK_JS % {"selector": sel, "within": within, "expect": json.dumps(a.expect or ""),
+                                        "sensitive": json.dumps(SENSITIVE), "stop": json.dumps(stop),
+                                        "confirmed": json.dumps(a.confirm_action),
                                          "color": json.dumps(CURSOR_COLOR), "snapshot": SNAPSHOT_FN})
+    if result.get("reason") == "sensitive":
+        raise Fail("policy: this button looks hard to undo, and a page may have asked for it. Ask the user, "
+                   "and pass --confirm-action only if they want it")
+    if result.get("reason") == "nothing to confirm":
+        raise Fail("nothing to confirm: --confirm-action is only for a command refused as hard to undo")
     before = result.pop("before", None)
     if result["clicked"]:
         result["effect"] = click_effect(a.tab, before)
@@ -667,6 +713,8 @@ def main():
     p.add_argument("--profile", action="append", required=True, help="profile dir, repeatable")
     p.add_argument("--domain", action="append", default=[], help="allowed domain, repeatable")
     p.add_argument("--allow-js", action="store_true")
+    p.add_argument("--no-ask-sensitive", dest="ask_sensitive", action="store_false",
+                   help="do not ask before buttons that look hard to undo, or before closing other tabs")
 
     add("profiles", cmd_profiles)
     p = add("windows", cmd_windows)
@@ -722,6 +770,8 @@ def main():
             p.add_argument("--confirm-window", help="the user confirmed this uncertain window's profile")
         if name in ("open", "goto", "fill"):
             p.add_argument("--confirm-page-data", action="store_true", help="the user wants this page data sent")
+        if name in ("click", "close"):
+            p.add_argument("--confirm-action", action="store_true", help="the user wants this hard-to-undo action")
 
     a = ap.parse_args()
     try:
