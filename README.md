@@ -125,7 +125,7 @@ Claude runs these for you through the skill.
 | `windows [--profile NAME]` | List windows and tabs. Any command on a window with an uncertain profile needs `--confirm-window ID` | No, but that flag asks |
 | `read TAB [--selector S]` | Read page text and interactive elements | No |
 | `wait TAB SELECTOR` | Wait for an element | No |
-| `open URL --profile NAME` | Open a tab in an existing window | Yes |
+| `open URL --profile NAME` | Open a tab in an existing window. Text copied from a page on another site needs `--confirm-page-data`, also for `goto` and `fill` | Yes |
 | `goto TAB URL` | Navigate a tab | Yes |
 | `activate TAB` | Bring a tab forward | Yes |
 | `click TAB SELECTOR [--expect T] [--within S] [--cursor]` | Click an element | Yes |
@@ -136,7 +136,7 @@ Claude runs these for you through the skill.
 ## Limitations
 
 - **The guard is a seatbelt, not a sandbox.** It matches text in Bash commands, so it stops accidents and page-driven injection, not deliberately disguised commands. Turning off the Chrome setting above is the real off switch.
-- **Prompt injection is not fully solved.** The skill tells Claude to treat page content as data, and no hook can enforce that.
+- **Prompt injection is not fully solved.** The skill tells Claude to treat page content as data, and no hook can enforce that. `open`, `goto` and `fill` do refuse text copied verbatim from a page on another site until you approve it, but a paraphrase or a short secret still gets through.
 - **One Chrome at a time.** AppleScript cannot choose between Chrome processes, so tabsteward stops if a second one is running, such as one started by chrome-devtools-mcp.
 - **Profile detection is inferred** from session files. Windows it cannot identify stay hidden and refused. A close call between two profiles stays hidden too, until you confirm it.
 - **Clicks are scripted.** Sites that require a real user gesture can ignore them, and native dialogs need you. `click` reports whether the page visibly changed and whether a dialog stopped the tab, but Claude still has to check the result.
