@@ -15,6 +15,7 @@ import chrome
 
 chrome.SEEN = Path(tempfile.mkdtemp()) / "seen.json"  # never the user's own record
 GUARD = Path(__file__).parents[1] / "hooks/guard.py"
+GUARD_SH = GUARD.with_suffix(".sh")  # what the hook runs: a pattern with no keyword there fails these tests
 ENV = {k: v for k, v in os.environ.items() if k != "TABSTEWARD_DEV"}  # a dev session must not reach the guard under test
 
 
@@ -404,9 +405,64 @@ class Setup(unittest.TestCase):
 
 class Guard(unittest.TestCase):
     def run_guard(self, tool, mode="auto", env=None, **tool_input):
-        r = subprocess.run([sys.executable, str(GUARD)], capture_output=True, text=True, env={**ENV, **(env or {})},
-                           input=json.dumps({"tool_name": tool, "permission_mode": mode, "tool_input": tool_input}))
+        r = self.run_sh(GUARD_SH, {"tool_name": tool, "permission_mode": mode, "tool_input": tool_input}, env)
         return json.loads(r.stdout)["hookSpecificOutput"]["permissionDecision"] if r.stdout else None
+
+    def run_sh(self, script, event, env=None, *args):
+        return subprocess.run(["/bin/sh", str(script), *args], capture_output=True, text=True,
+                              env={**ENV, **(env or {})}, input=json.dumps(event, separators=(",", ":")))
+
+    def broken_copy(self, d):
+        """guard.sh with no guard.py beside it: reaching Python now fails."""
+        copy = Path(d) / "guard.sh"
+        copy.write_text(GUARD_SH.read_text())
+        return copy
+
+    def test_the_hook_runs_the_filter(self):
+        hooks = json.loads((GUARD.parent / "hooks.json").read_text())["hooks"]
+        self.assertIn("guard.sh", hooks["PreToolUse"][0]["hooks"][0]["command"])
+        self.assertIn("guard.sh", hooks["UserPromptSubmit"][0]["hooks"][0]["command"])
+
+    def test_unrelated_commands_need_no_python(self):
+        with tempfile.TemporaryDirectory() as d:
+            copy = self.broken_copy(d)
+            r = self.run_sh(copy, {"tool_name": "Bash", "tool_input": {"command": "git status --short"}})
+            self.assertEqual((r.returncode, r.stdout), (0, ""))
+            r = self.run_sh(copy, {"prompt": "hello"}, None, "user-prompt")
+            self.assertEqual((r.returncode, r.stdout), (0, ""))
+
+    def test_a_guard_that_cannot_run_still_blocks_what_matters(self):
+        with tempfile.TemporaryDirectory() as d:
+            copy = self.broken_copy(d)
+            for event in ({"tool_name": "Bash", "tool_input": {"command": "python3 /x/scripts/chrome.py click 1 a"}},
+                          {"tool_name": "Write", "tool_input": {"file_path": "/tmp/x", "content": "y"}},
+                          {"tool_name": "Edit", "tool_input": {"file_path": "/tmp/x", "new_string": "y"}}):
+                self.assertNotEqual(self.run_sh(copy, event).returncode, 0, event)
+
+    def test_write_through_a_symlink_reaches_python(self):
+        with tempfile.TemporaryDirectory() as d:
+            target = Path(d) / ".config/tabsteward/policy.json"
+            target.parent.mkdir(parents=True)
+            target.write_text("{}")
+            link = Path(d) / "innocent.txt"
+            link.symlink_to(target)
+            self.assertEqual(self.run_guard("Write", file_path=str(link), content="{}"), "deny")
+
+    def test_broken_input_reaches_python(self):
+        r = subprocess.run(["/bin/sh", str(GUARD_SH)], input="not json", capture_output=True, text=True, env=ENV)
+        self.assertEqual(json.loads(r.stdout)["hookSpecificOutput"]["permissionDecision"], "deny")
+
+    def test_a_flag_alone_still_asks(self):
+        for cmd in ('"$tool" read 1 --confirm-window 1', '"$tool" open https://a.b --confirm-page-data', '"$tool" click 1 a --confirm-action'):
+            self.assertEqual(self.run_guard("Bash", command=cmd), "ask", cmd)
+
+    def test_quotes_do_not_split_a_keyword(self):
+        for cmd in ("cat ~/.config/tabs'teward'/policy.json", 'cat ~/.config/tabs"teward"/audit.jsonl', "cat ~/.config/tabs\\teward/policy.json"):
+            self.assertEqual(self.run_guard("Bash", command=cmd), "deny", cmd)
+
+    def test_the_filter_is_protected_too(self):
+        self.assertEqual(self.run_guard("Edit", file_path="/p/tabsteward/hooks/guard.sh", new_string="x"), "deny")
+        self.assertEqual(self.run_guard("Bash", command="cat /p/hooks/guard.sh"), "deny")
 
     def test_raw_chrome_denied(self):
         for cmd in ('osascript -e \'tell application "Google Chrome" to count windows\'',
@@ -561,7 +617,8 @@ class Guard(unittest.TestCase):
         commands = [h["command"] for event in hooks.values() for entry in event for h in entry["hooks"]]
         self.assertEqual(len(commands), 3)
         for command in commands:
-            self.assertTrue(command.startswith("python3 -I "), command)
+            self.assertTrue(command.startswith(("python3 -I ", "/bin/sh ")), command)
+        self.assertIn('python3 -I "${0%/*}/guard.py"', GUARD_SH.read_text())
 
     def test_a_guard_that_cannot_start_blocks_the_tool(self):
         entry = json.loads((GUARD.parent / "hooks.json").read_text())["hooks"]["PreToolUse"][0]

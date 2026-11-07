@@ -23,7 +23,7 @@ RAW_CHROME = [
 ]
 ANTI_GUARD = r"disableAllHooks|TABSTEWARD_DEV|\bplugins?\b[^|;&\n]*\b(disable|uninstall|remove)\b[^|;&\n]*tabsteward|tabsteward@\S*:\s*false"
 STATE = r"\.config/tabsteward\b|\bsetup-grant\b|tabsteward/(policy\.json|audit\.jsonl)"
-GUARD_FILES = r"hooks/guard\.py|tabsteward\S*/hooks/hooks\.json"  # also the cache layout, <name>/<version>/hooks/
+GUARD_FILES = r"hooks/guard\.(py|sh)|tabsteward\S*/hooks/hooks\.json"  # also the cache layout, <name>/<version>/hooks/
 WRITE_TO = r"(>|\btee\b|\bsed\b[^|;&\n]*\s-i|\b(cp|mv|rm|ln)\b)[^|;&\n]*(chrome\.py|hooks/hooks\.json)\b"  # generic names: reading or running stays allowed
 PROTECTED_MENTION = "|".join((STATE, GUARD_FILES, WRITE_TO, ANTI_GUARD))
 PROTECTED_PATH = "|".join((STATE, GUARD_FILES, r"skills/tabsteward/scripts/chrome\.py$"))
