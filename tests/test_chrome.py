@@ -816,7 +816,7 @@ class ClickEffect(unittest.TestCase):
     before = {"url": "http://a/", "hash": 1}
     still = {**before, "mark": True, "ran": True}
 
-    def effect(self, *polls):
+    def effect(self, *polls, seconds=0.02):
         """Each poll is a snapshot or an exception. The last one repeats until the time budget ends."""
         polls = list(polls)
         def poll(*_):
@@ -825,7 +825,7 @@ class ClickEffect(unittest.TestCase):
                 raise item
             return item
         with patch.object(chrome, "js_json", side_effect=poll), patch.object(chrome, "js"), \
-             patch.object(chrome, "EFFECT_SECONDS", 0.02), patch.object(chrome, "EFFECT_POLL", 0.001):
+             patch.object(chrome, "EFFECT_SECONDS", seconds), patch.object(chrome, "EFFECT_POLL", 0.001):
             return chrome.click_effect("1", self.before)
 
     def test_page_changed(self):
@@ -845,7 +845,7 @@ class ClickEffect(unittest.TestCase):
         self.assertEqual(self.effect(chrome.Blocked("timed out")), "blocked")
 
     def test_errors_while_navigating_are_transient(self):
-        self.assertEqual(self.effect(chrome.Fail("boom"), None, {**self.still, "hash": 2}), "changed")
+        self.assertEqual(self.effect(chrome.Fail("boom"), None, {**self.still, "hash": 2}, seconds=5), "changed")  # needs 3 looks, however slow the machine
 
     def test_cleanup_failure_does_not_hide_a_landed_click(self):
         with patch.object(chrome, "watch_click", return_value="navigated"), \
