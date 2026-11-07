@@ -1,6 +1,6 @@
 {
   "name": "tabsteward",
-  "version": "0.11.0",
+  "version": "0.11.1",
   "description": "Drive your already-open, logged-in Google Chrome on macOS via AppleScript, with no extension or debug port.",
   "author": {
     "name": "Vu Nguyen"

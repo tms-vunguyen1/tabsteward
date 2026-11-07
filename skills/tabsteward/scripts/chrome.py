@@ -106,13 +106,22 @@ def osa(script, *args, timeout=TIMEOUT):
 
 
 def on_tab(tab_id, body, *args, timeout=TIMEOUT):
-    """Run AppleScript `body` with t (tab), w (window), i (tab index). argv 1 is the tab id."""
+    """Run AppleScript `body` with t (tab), w (window), i (tab index). argv 1 is the tab id.
+    Tabs are found by id: an index shifts when a tab opens or closes meanwhile (error -1719)."""
     script = f'''on run argv
+set target to item 1 of argv
 tell application "{APP}"
-repeat with w in windows
-repeat with i from 1 to count of tabs of w
-set t to tab i of w
-if ((id of t) as text) is (item 1 of argv) then
+set wids to id of every window
+repeat with wid in wids
+try
+set tids to id of tabs of window id wid
+on error number -1728
+set tids to {{}}
+end try
+repeat with i from 1 to count of tids
+if item i of tids is target then
+set w to window id wid
+set t to tab id target of w
 {body}
 end if
 end repeat
@@ -412,11 +421,22 @@ def windows(confirm=None):
     script = f'''set out to ""
 set f to character id 31
 tell application "{APP}"
-repeat with w in windows
-set a to active tab index of w
-repeat with i from 1 to count of tabs of w
-set t to tab i of w
-set out to out & (id of w) & f & (id of t) & f & (i = a) & f & (URL of t) & f & (title of t) & (character id 30)
+set wids to id of every window
+repeat with wid in wids
+try
+set a to id of active tab of window id wid
+set tids to id of tabs of window id wid
+on error number -1728
+set tids to {{}}
+end try
+repeat with tid in tids
+try
+set t to tab id tid of window id wid
+set u to get URL of t
+set n to get title of t
+set out to out & wid & f & tid & f & ((tid as text) = a) & f & u & f & n & (character id 30)
+on error number -1728
+end try
 end repeat
 end repeat
 end tell
