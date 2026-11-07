@@ -379,6 +379,17 @@ class UncertainWindows(unittest.TestCase):
             chrome.resolve_profile("Work", known)
 
 
+class TabsById(unittest.TestCase):
+    def test_tabs_and_windows_are_never_reached_by_index(self):
+        """An index shifts when a tab opens or closes mid-listing: -1719, or one tab's URL under another's id."""
+        with patch.object(chrome, "osa", return_value="") as osa, patch.object(chrome, "session_blobs", return_value={}):
+            chrome.windows()
+            chrome.on_tab("7", "return URL of t")
+        for script in (c.args[0] for c in osa.call_args_list):
+            self.assertIn("tab id", script)
+            self.assertNotRegex(script, r"tab i of|repeat with w in windows")
+
+
 class Policy(unittest.TestCase):
     pol = {"profiles": ["P1"], "allow_js": False, "allow_domains": []}
 
