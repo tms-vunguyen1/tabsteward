@@ -109,7 +109,8 @@ Setup writes `~/.config/tabsteward/policy.json`, which stays on your machine. Yo
   "profiles": ["Profile 3"],
   "allow_js": false,
   "allow_domains": ["example.com"],
-  "ask_sensitive": true
+  "ask_sensitive": true,
+  "sensitive_words": []
 }
 ```
 
@@ -119,6 +120,7 @@ Setup writes `~/.config/tabsteward/policy.json`, which stays on your machine. Yo
 | `allow_js` | Whether arbitrary JavaScript may run. Leave this off unless you need it. |
 | `allow_domains` | Allowed sites. `example.com` also covers subdomains. Empty means any web domain. |
 | `ask_sensitive` | Whether to ask before buttons that look hard to undo and before closing tabs Claude did not open. Missing means `true`. |
+| `sensitive_words` | Extra button words to ask about, added to the built-in English list. Use it for other languages, such as `"löschen"`. |
 
 ## Commands
 
