@@ -49,9 +49,7 @@ TOKEN = re.compile(r"[a-z0-9_-]{16,}")  # also needs a letter and a digit
 EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
 OPENED = CONFIG / "opened.json"  # tabs tabsteward opened, closed without asking for SEEN_HOURS
 SENSITIVE_WORDS = ("delete", "remove", "erase", "pay", "payment", "purchase", "buy", "checkout", "check out",
-                   "place order", "transfer", "send", "post", "publish", "xóa", "xoá", "thanh toán", "mua",
-                   "đặt hàng", "chuyển tiền", "chuyển khoản", "gửi", "đăng bài", "đăng tin")  # "đăng" alone is also log in
-SENSITIVE = r"(?<![\p{L}\p{N}])(?:" + "|".join(SENSITIVE_WORDS) + r")(?![\p{L}\p{N}])"  # JS regex, flags iu
+                   "place order", "transfer", "send", "post", "publish")  # other languages: `sensitive_words` in the policy
 HIDDEN_NODES = 3000   # text nodes `read` checks for CSS hiding, so a huge page stays fast
 HIDDEN_MIN = 20       # shorter text nodes are skipped: labels, not sentences
 SAMPLE_CHARS = 120    # page text quoted in a `suspicious` finding
@@ -148,7 +146,22 @@ def policy():
     except ValueError:
         raise Fail(f"{POLICY} is not valid JSON: ask the user to fix it")
     return {"profiles": p.get("profiles") or [], "allow_js": p.get("allow_js") is True,
-            "allow_domains": p.get("allow_domains") or [], "ask_sensitive": p.get("ask_sensitive") is not False}
+            "allow_domains": p.get("allow_domains") or [], "ask_sensitive": p.get("ask_sensitive") is not False,
+            "sensitive_words": clean_words(p.get("sensitive_words", []))}
+
+
+def clean_words(words):
+    """In the form `click` compares against. A broken list stops here rather than quietly checking less."""
+    if not isinstance(words, list) or not all(isinstance(w, str) for w in words):
+        raise Fail(f'{POLICY}: "sensitive_words" must be a list of words: ask the user to fix it')
+    spaced = (" ".join(unicodedata.normalize("NFC", w).split()) for w in words)
+    return [w for w in spaced if w]  # a blank word would match every button
+
+
+def sensitive_regex(extra):
+    """JS regex, flags iu. That `u` rejects needless escapes, so only syntax characters get one."""
+    words = [re.sub(r"[\\^$.*+?()[\]{}|/]", r"\\\g<0>", w) for w in (*SENSITIVE_WORDS, *extra)]
+    return r"(?<![\p{L}\p{N}])(?:" + "|".join(words) + r")(?![\p{L}\p{N}])"
 
 
 def check_url(url, pol):
@@ -311,6 +324,7 @@ def audit(a, outcome):
             entry[k] = getattr(a, k)
     if a.cmd == "set-policy":
         entry["ask_sensitive"] = a.ask_sensitive
+        entry["sensitive_words"] = a.sensitive_word
     if a.cmd == "fill":
         entry["chars"] = len(a.text)
     with AUDIT.open("a", encoding="utf-8") as f:
@@ -465,7 +479,8 @@ def cmd_set_policy(a):
     bad = [d for d in domains if not DOMAIN.fullmatch(d)]
     if bad:
         raise Fail(f"not a bare domain: {bad}, use the form example.com")
-    new = {"profiles": a.profile, "allow_js": a.allow_js, "allow_domains": domains, "ask_sensitive": a.ask_sensitive}
+    new = {"profiles": a.profile, "allow_js": a.allow_js, "allow_domains": domains, "ask_sensitive": a.ask_sensitive,
+           "sensitive_words": clean_words(a.sensitive_word)}
     CONFIG.mkdir(parents=True, exist_ok=True)
     tmp = POLICY.with_suffix(".tmp")
     tmp.write_text(json.dumps(new, indent=2) + "\n", encoding="utf-8")
@@ -705,9 +720,10 @@ def cmd_click(a):
         cursor = js(a.tab, cursor_js(sel, within))
         if cursor == "moving":
             time.sleep(CURSOR_MS / 1000 + CURSOR_PAUSE)
-    stop = policy()["ask_sensitive"] and not a.confirm_action
+    pol = policy()
+    stop = pol["ask_sensitive"] and not a.confirm_action
     result = js_json(a.tab, CLICK_JS % {"selector": sel, "within": within, "expect": json.dumps(a.expect or ""),
-                                        "sensitive": json.dumps(SENSITIVE), "stop": json.dumps(stop),
+                                        "sensitive": json.dumps(sensitive_regex(pol["sensitive_words"])), "stop": json.dumps(stop),
                                         "confirmed": json.dumps(a.confirm_action),
                                          "color": json.dumps(CURSOR_COLOR), "snapshot": SNAPSHOT_FN})
     if result.get("reason") == "sensitive":
@@ -780,6 +796,8 @@ def main():
     p.add_argument("--allow-js", action="store_true")
     p.add_argument("--no-ask-sensitive", dest="ask_sensitive", action="store_false",
                    help="do not ask before buttons that look hard to undo, or before closing other tabs")
+    p.add_argument("--sensitive-word", action="append", default=[], metavar="WORD",
+                   help="extra button word to ask about, repeat for more")
 
     add("profiles", cmd_profiles)
     p = add("windows", cmd_windows)

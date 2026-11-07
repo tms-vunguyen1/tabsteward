@@ -345,8 +345,10 @@ class Policy(unittest.TestCase):
 
 
 class Sensitive(unittest.TestCase):
-    pol = {"profiles": ["P1"], "allow_js": False, "allow_domains": [], "ask_sensitive": True}
-    words = re.compile(chrome.SENSITIVE.replace(r"[\p{L}\p{N}]", r"\w"), re.IGNORECASE)
+    pol = {"profiles": ["P1"], "allow_js": False, "allow_domains": [], "ask_sensitive": True, "sensitive_words": []}
+    def words_with(extra):
+        return re.compile(chrome.sensitive_regex(extra).replace(r"[\p{L}\p{N}]", r"\w"), re.IGNORECASE)
+    words = words_with([])
 
     def click(self, reply, **kw):
         a = SimpleNamespace(**{"tab": "7", "selector": "#b", "within": None, "expect": None, "cursor": False,
@@ -364,12 +366,32 @@ class Sensitive(unittest.TestCase):
             chrome.gate(a)
 
     def test_words_catch_hard_to_undo_buttons(self):
-        for text in ("Delete account", "Pay now", "Thanh toán", "Xóa", "Xoá tài khoản", "Gửi", "Post", "Đăng bài", "SEND"):
+        for text in ("Delete account", "Pay now", "Post", "SEND"):
             self.assertTrue(self.words.search(text), text)
 
     def test_words_leave_ordinary_buttons_alone(self):
-        for text in ("Đăng nhập", "Đăng ký", "Đăng xuất", "PayPal", "Postcode", "Sender", "Sign in", "Next", "Search"):
+        for text in ("PayPal", "Postcode", "Sender", "Sign in", "Next", "Search"):
             self.assertIsNone(self.words.search(text), text)
+
+    def test_policy_words_add_to_the_list(self):
+        words = Sensitive.words_with(["löschen", "c++", "a.b"])
+        for text in ("Konto Löschen", "C++", "a.b", "Delete"):
+            self.assertTrue(words.search(text), text)
+        for text in ("Verlöschen", "c", "axb"):
+            self.assertIsNone(words.search(text), text)
+        self.assertIsNone(self.words.search("löschen"))
+
+    def test_click_uses_the_policy_words(self):
+        with patch.object(self, "pol", {**self.pol, "sensitive_words": ["löschen"]}):
+            self.assertIn("l\\u00f6schen", self.click({"clicked": False, "reason": "disabled"})[1])
+
+    def test_policy_words_are_cleaned(self):
+        self.assertEqual(chrome.clean_words(["  a   b ", "", "  ", "e\u0301"]), ["a b", "\u00e9"])
+
+    def test_broken_policy_words_stop_instead_of_checking_less(self):
+        for value in ("delete", [1], None):
+            with self.assertRaisesRegex(chrome.Fail, "sensitive_words"):
+                chrome.clean_words(value)
 
     def test_sensitive_click_refused(self):
         with self.assertRaisesRegex(chrome.Fail, "--confirm-action"):
@@ -411,13 +433,15 @@ class Sensitive(unittest.TestCase):
             path.write_text('{"profiles": ["P1"]}')
             with patch.object(chrome, "POLICY", path):
                 self.assertIs(chrome.policy()["ask_sensitive"], True)
+                self.assertEqual(chrome.policy()["sensitive_words"], [])
 
 
 class Setup(unittest.TestCase):
     known = [{"dir": "P1", "name": "A", "email": "a@x"}]
 
     def run_set(self, tmp, **kw):
-        args = SimpleNamespace(**{"profile": ["P1"], "domain": [], "allow_js": False, "ask_sensitive": True, **kw})
+        args = SimpleNamespace(**{"profile": ["P1"], "domain": [], "allow_js": False, "ask_sensitive": True,
+                                 "sensitive_word": [], **kw})
         with patch.object(chrome, "profiles", return_value=self.known), patch.object(chrome, "CONFIG", tmp), \
              patch.object(chrome, "POLICY", tmp / "policy.json"):
             return chrome.cmd_set_policy(args)
@@ -425,9 +449,10 @@ class Setup(unittest.TestCase):
     def test_writes_private_file(self):
         with tempfile.TemporaryDirectory() as d:
             tmp = Path(d) / "new"
-            self.run_set(tmp, domain=["X.com"])
+            self.run_set(tmp, domain=["X.com"], sensitive_word=[" löschen "])
             self.assertEqual(json.loads((tmp / "policy.json").read_text()),
-                             {"profiles": ["P1"], "allow_js": False, "allow_domains": ["x.com"], "ask_sensitive": True})
+                             {"profiles": ["P1"], "allow_js": False, "allow_domains": ["x.com"], "ask_sensitive": True,
+                              "sensitive_words": ["löschen"]})
             self.assertEqual((tmp / "policy.json").stat().st_mode & 0o777, 0o600)
 
     def test_grant_is_single_use(self):
@@ -757,7 +782,7 @@ class ClickEffect(unittest.TestCase):
         a = SimpleNamespace(tab="1", selector="#b", within=None, expect=None, cursor=False, confirm_action=False)
         done = {"clicked": True, "text": "x", "before": self.before}
         with patch.object(chrome, "js_json", return_value=done), patch.object(chrome, "click_effect", return_value="blocked"), \
-             patch.object(chrome, "policy", return_value={"ask_sensitive": True}):
+             patch.object(chrome, "policy", return_value={"ask_sensitive": True, "sensitive_words": []}):
             result = chrome.cmd_click(a)
         self.assertEqual(result["effect"], "blocked")
         self.assertNotIn("before", result)
@@ -765,7 +790,7 @@ class ClickEffect(unittest.TestCase):
     def test_refused_click_has_no_effect_check(self):
         a = SimpleNamespace(tab="1", selector="#b", within=None, expect=None, cursor=False, confirm_action=False)
         with patch.object(chrome, "js_json", return_value={"clicked": False, "reason": "disabled"}), \
-             patch.object(chrome, "policy", return_value={"ask_sensitive": True}), \
+             patch.object(chrome, "policy", return_value={"ask_sensitive": True, "sensitive_words": []}), \
              patch.object(chrome, "click_effect") as effect:
             chrome.cmd_click(a)
         effect.assert_not_called()
