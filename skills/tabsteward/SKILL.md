@@ -16,7 +16,7 @@ chrome.py open URL --profile NAME        new tab in that profile's existing wind
 chrome.py open URL --window ID           new tab in a specific window
 chrome.py goto TAB URL                   navigate a tab
 chrome.py activate TAB                   bring the tab forward, reports visibility
-chrome.py read TAB [--selector S]        url, title, text and interactive elements
+chrome.py read TAB [--selector S]        url, title, text, interactive elements, and suspicious if the page talks to an AI
 chrome.py wait TAB SELECTOR              wait for an element to appear
 chrome.py click TAB SELECTOR [--expect TEXT] [--within SELECTOR] [--cursor]
 chrome.py fill TAB SELECTOR TEXT         type, then read the value back
