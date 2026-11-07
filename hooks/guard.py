@@ -31,7 +31,6 @@ MUTATING = CHROME_PY + r"(open|goto|activate|click|fill|js|close)\b"
 SET_POLICY = CHROME_PY + r"set-policy\b"
 CONFIRM_WINDOW = r"--confirm-window\b"
 CONFIRM_DATA = r"--confirm-page-data\b"
-CONFIRM_ACTION = r"--confirm-action\b"
 POLICY = Path.home() / ".config/tabsteward/policy.json"
 GRANT = POLICY.with_name("setup-grant")  # proof the user typed the setup command, consumed by set-policy
 GRANT_SECONDS = 900
@@ -78,8 +77,7 @@ def decide(event):
         if found(PROTECTED_MENTION, text):
             return "deny", "tabsteward: the policy, audit log and guard are off limits"
     setting, confirming, sending = found(SET_POLICY, text), found(CONFIRM_WINDOW, text), found(CONFIRM_DATA, text)
-    acting = found(CONFIRM_ACTION, text)
-    needs_person = setting or confirming or sending or acting
+    needs_person = setting or confirming or sending
     if needs_person or found(MUTATING, text):
         if event.get("permission_mode") == "bypassPermissions":
             return "deny", "tabsteward: this needs a human, not bypass mode"
@@ -87,7 +85,7 @@ def decide(event):
             return "deny", f"tabsteward: changing a policy needs the user to type {SETUP_COMMAND}"
     if needs_person:  # the rest was decided in setup, and chrome.py enforces it
         what = ("change its policy" if setting else "send data it read on one site to another" if sending
-                else "use a window whose profile is uncertain" if confirming else "take an action that is hard to undo")
+                else "use a window whose profile is uncertain")
         return "ask", f"tabsteward wants to {what}: {cmd[:300]}"
     return None
 
