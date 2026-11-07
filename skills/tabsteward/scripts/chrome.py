@@ -59,24 +59,17 @@ ZERO_WIDTH = re.compile("[\u00ad\u200b-\u200d\u2060\ufeff]")
 GRAB = r"[^.!?\n]{0,60}"  # stays inside one sentence
 SECRET = (r"(?:passwords?|credentials?|cookies?|api keys?|(?:access |session |auth )?tokens?|secrets?|private keys?"
           r"|(?:chat|conversation) history|system prompt)")
-SECRET_VI = r"(?:mật khẩu|token|cookie|khóa api|thông tin đăng nhập|lịch sử trò chuyện)"
 AI_NAME = r"(?:the |all |any )?(?:ai|llm|claude|chatgpt|gpt|gemini|copilot)(?: (?:assistants?|agents?|models?))?"
 SUSPICIOUS = {  # matched on normalized text, see normalize()
     "ai_instruction": re.compile("|".join((
         r"\b(?:ignore|disregard|forget|override) (?:(?:all|any|the|your|these|of) )*(?:previous|prior|earlier|above"
         r"|preceding|original) (?:\w+ )?(?:instructions?|prompts?|rules|directions|guidelines)\b",
         rf"\b(?:dear|attention|hey|hello|note to|message for|instructions for) {AI_NAME} ?[:,]",
-        r"\b(?:do not|don't|never) (?:tell|inform|alert|notify) (?:the )?user\b",
-        r"\b(?:bỏ qua|phớt lờ|quên) (?:đi )?(?:(?:mọi|tất cả|toàn bộ|các|những) )*(?:hướng dẫn|chỉ dẫn|chỉ thị|lệnh"
-        r"|quy tắc) (?:trước|ở trên|bên trên|của hệ thống)",
-        r"\b(?:gửi|thưa) (?:trợ lý )?(?:ai|claude|chatgpt) ?[:,]",
-        r"\b(?:đừng|không được) (?:nói|báo|tiết lộ) (?:cho |với )?người dùng\b")), re.I),
+        r"\b(?:do not|don't|never) (?:tell|inform|alert|notify) (?:the )?user\b")), re.I),
     "data_request": re.compile("|".join((
         rf"\b(?:send|forward|post|upload|email|transmit|exfiltrate|submit)\b{GRAB}\b{SECRET}\b{GRAB}"
         r"\b(?:to|at|into) (?:https?://|[\w.+-]+@|[a-z0-9-]+\.[a-z]{2,})",
-        r"\b(?:open|visit|navigate to|go to|fetch|load) https?://\S+[?&#]\S*(?:[{<\[]|%7b|%3c)",
-        rf"\b(?:gửi|chuyển|đăng|tải)\b{GRAB}\b{SECRET_VI}\b{GRAB}"
-        r"\b(?:đến|tới|sang|cho|vào) (?:https?://|[\w.+-]+@|[a-z0-9-]+\.[a-z]{2,})")), re.I),
+        r"\b(?:open|visit|navigate to|go to|fetch|load) https?://\S+[?&#]\S*(?:[{<\[]|%7b|%3c)")), re.I),
 }
 MUTATING = {"open", "goto", "activate", "click", "fill", "js", "close", "set-policy"}
 SETUP = {"setup-info", "set-policy"}  # the only commands that run before a policy exists
