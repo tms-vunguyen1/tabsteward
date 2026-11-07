@@ -223,6 +223,80 @@ class SuspiciousPages(unittest.TestCase):
         self.assertEqual(chrome.seen_store()["pages"][0]["flags"], [])
 
 
+class SteeredSends(unittest.TestCase):
+    def setUp(self):
+        chrome.SEEN.unlink(missing_ok=True)
+
+    def read(self, url, hidden=True, ago=0):
+        flags = [] if hidden == "clean" else [{"kind": "ai_instruction", "hidden": hidden}]
+        with patch.object(chrome.time, "time", return_value=chrome.time.time() - ago):
+            chrome.remember({"url": url, "title": "T", "text": "x", "elements": []}, flags)
+
+    def gate(self, **kw):
+        tabs = [{"window": "1", "profile": "P1", "tabs": [{"tab": "7", "url": kw.pop("tab_url", "https://b.example/")}]}]
+        a = SimpleNamespace(**{"confirm_page_data": False, **kw})
+        pol = {"profiles": ["P1"], "allow_js": True, "allow_domains": []}
+        with patch.object(chrome, "require_single_chrome"), patch.object(chrome, "policy", return_value=pol), \
+             patch.object(chrome, "windows", return_value=tabs):
+            chrome.gate(a)
+
+    def refused(self, **kw):
+        with self.assertRaisesRegex(chrome.Fail, "--confirm-page-data"):
+            self.gate(**kw)
+
+    def test_after_hidden_wording_data_cannot_leave_for_another_site(self):
+        self.read("https://evil.example/")
+        self.refused(cmd="open", url="https://b.example/?q=summary")
+        self.refused(cmd="goto", tab="7", url="https://b.example/#summary")
+        self.refused(cmd="fill", tab="7", selector="#a", text="short")
+
+    def test_flagged_page_cannot_collect_from_another_site_read_since(self):
+        self.read("https://evil.example/")
+        self.read("https://mail.example/inbox", hidden="clean")
+        self.refused(cmd="fill", tab="7", tab_url="https://evil.example/f", selector="#a", text="short")
+        self.refused(cmd="open", url="https://evil.example/?d=short")
+        self.refused(cmd="open", url="https://mail.example/?d=short")
+
+    def test_one_site_keeps_working(self):
+        self.read("https://evil.example/")
+        self.gate(cmd="fill", tab="7", tab_url="https://evil.example/f", selector="#a", text="short")
+        self.gate(cmd="goto", tab="7", tab_url="https://evil.example/f", url="https://evil.example/?q=1")
+        self.gate(cmd="open", url="https://sub.evil.example/?q=1")
+
+    def test_url_with_no_query_is_not_a_send(self):
+        self.read("https://evil.example/")
+        self.gate(cmd="open", url="https://b.example/path")
+
+    def test_visible_or_unknown_wording_does_not_refuse(self):
+        for hidden in (False, None):
+            self.read("https://a.example/", hidden=hidden)
+            self.gate(cmd="open", url="https://b.example/?q=1")
+
+    def test_flag_runs_out(self):
+        self.read("https://evil.example/", ago=(chrome.SUSPECT_MINUTES + 1) * 60)
+        self.gate(cmd="open", url="https://b.example/?q=1")
+        self.read("https://evil.example/", ago=(chrome.SUSPECT_MINUTES - 1) * 60)
+        self.refused(cmd="open", url="https://b.example/?q=1")
+
+    def test_js_is_refused_wherever_it_runs(self):
+        self.gate(cmd="js", tab="7")
+        self.read("https://evil.example/")
+        self.refused(cmd="js", tab="7", tab_url="https://evil.example/")
+
+    def test_confirming_lets_it_through_and_is_needed(self):
+        self.read("https://evil.example/")
+        self.gate(cmd="open", url="https://b.example/?q=1", confirm_page_data=True)
+        self.gate(cmd="js", tab="7", confirm_page_data=True)
+        chrome.SEEN.unlink()
+        with self.assertRaisesRegex(chrome.Fail, "nothing to confirm"):
+            self.gate(cmd="js", tab="7", confirm_page_data=True)
+
+    def test_a_page_with_no_host_is_not_another_site(self):
+        self.read("https://evil.example/")
+        self.read("about:blank", hidden="clean")
+        self.gate(cmd="open", url="https://evil.example/?q=1")
+
+
 class UncertainWindows(unittest.TestCase):
     pol = {"profiles": ["P1"], "allow_js": False, "allow_domains": []}
     tabs = [{"tab": "7", "url": "https://a.b/", "active": True, "title": "t"}]
