@@ -31,11 +31,11 @@
 
 Browser automation usually starts a separate browser that knows nothing about you. tabsteward works in the Chrome you already have open, with your sessions, and needs no extension or debug port.
 
-That access is powerful, so nothing runs until you choose what is allowed. You pick the profiles and sites, and you approve every change to the browser.
+That access is powerful, so nothing runs until you choose what is allowed. You pick the profiles and sites once in setup. Inside those choices Claude works without interrupting you, and everything outside them is refused.
 
 - **Your real browser.** Open tabs, read pages, click and fill forms in the windows you already use.
 - **Default deny.** No policy means no access, and profiles you did not allow stay out of reach.
-- **Human approval.** Every click, fill, navigation and tab close asks you first.
+- **Prompts only when they matter.** You are asked before page data goes to another site, before buttons such as delete, pay, send or post, and before Claude closes a tab it did not open. You can turn off that last group in setup.
 - **A visible cursor.** Ask to watch and a labelled cursor shows what is about to be clicked.
 - **An audit trail.** Every attempted change is logged locally, without the text you typed.
 - **No dependencies.** It only needs Python's standard library and macOS AppleScript.
@@ -59,7 +59,10 @@ Claude starts setup the first time you ask for something in your browser, or you
 /tabsteward:setup
 ```
 
-Setup lists the Chrome profiles on your machine, then asks which ones Claude may use, whether to limit it to specific sites, and whether to allow arbitrary JavaScript. You approve the result in a prompt.
+Setup lists the Chrome profiles on your machine, then asks which ones Claude may use, whether to limit it to specific sites, whether to allow arbitrary JavaScript, and whether to ask before hard-to-undo actions. You approve the result in a prompt.
+
+> [!IMPORTANT]
+> Claude clicks and types without asking inside what you allow here. With any site allowed, that covers every site you are logged in to in that profile, so a list of sites and a low-stakes profile are safer.
 
 **3. Allow scripting in Chrome**
 
@@ -80,18 +83,18 @@ Open a new tab in my Personal profile and search X for "AI"
 flowchart LR
     A[Claude Code] --> B{Guard hook}
     B -- raw Chrome access --> X[Denied]
-    B -- browser change --> C[You approve]
-    B -- read only --> D{Policy}
-    C --> D
+    B -- browser command --> D{Policy}
     D -- outside your rules --> X
     D -- allowed --> E[Your Chrome]
+    D -- page data to another site, or hard to undo --> C[You approve]
+    C --> E
     E --> F[(Audit log)]
 ```
 
 | Layer | What it does |
 |---|---|
 | **Policy** | Limits which profiles and domains are reachable, and whether arbitrary JavaScript runs. Only `http(s)` pages are allowed. |
-| **Guard hook** | Blocks raw `osascript`, the Chrome binary and Chrome's data folder. Protects the policy, and asks you before each browser change. |
+| **Guard hook** | Blocks raw `osascript`, the Chrome binary and Chrome's data folder. Protects the policy, and asks you when a `--confirm-*` flag is used. |
 | **Audit log** | Records each attempted change and its outcome in `~/.config/tabsteward/audit.jsonl`. |
 | **Credentials rule** | `fill` refuses password fields, and `read` masks their values. |
 
@@ -105,7 +108,8 @@ Setup writes `~/.config/tabsteward/policy.json`, which stays on your machine. Yo
 {
   "profiles": ["Profile 3"],
   "allow_js": false,
-  "allow_domains": ["example.com"]
+  "allow_domains": ["example.com"],
+  "ask_sensitive": true
 }
 ```
 
@@ -114,6 +118,7 @@ Setup writes `~/.config/tabsteward/policy.json`, which stays on your machine. Yo
 | `profiles` | Profile folders Claude may touch, listed in `chrome://version` under "Profile Path". |
 | `allow_js` | Whether arbitrary JavaScript may run. Leave this off unless you need it. |
 | `allow_domains` | Allowed sites. `example.com` also covers subdomains. Empty means any web domain. |
+| `ask_sensitive` | Whether to ask before buttons that look hard to undo and before closing tabs Claude did not open. Missing means `true`. |
 
 ## Commands
 
@@ -125,18 +130,18 @@ Claude runs these for you through the skill.
 | `windows [--profile NAME]` | List windows and tabs. Any command on a window with an uncertain profile needs `--confirm-window ID` | No, but that flag asks |
 | `read TAB [--selector S]` | Read page text and interactive elements | No |
 | `wait TAB SELECTOR` | Wait for an element | No |
-| `open URL --profile NAME` | Open a tab in an existing window. Text copied from a page on another site needs `--confirm-page-data`, also for `goto` and `fill` | Yes |
-| `goto TAB URL` | Navigate a tab | Yes |
-| `activate TAB` | Bring a tab forward | Yes |
-| `click TAB SELECTOR [--expect T] [--within S] [--cursor]` | Click an element | Yes |
-| `fill TAB SELECTOR TEXT` | Fill a field and read it back | Yes |
-| `js TAB --code JS` | Run custom JavaScript, off by default | Yes |
-| `close TAB` | Close one tab | Yes |
+| `open URL --profile NAME` | Open a tab in an existing window. Text copied from a page on another site needs `--confirm-page-data`, also for `goto` and `fill` | No, but that flag asks |
+| `goto TAB URL` | Navigate a tab | No, but that flag asks |
+| `activate TAB` | Bring a tab forward | No |
+| `click TAB SELECTOR [--expect T] [--within S] [--cursor]` | Click an element. A button that looks hard to undo needs `--confirm-action` | No, but that flag asks |
+| `fill TAB SELECTOR TEXT` | Fill a field and read it back | No, but that flag asks |
+| `js TAB --code JS` | Run custom JavaScript, off by default | No |
+| `close TAB` | Close one tab. A tab Claude did not open needs `--confirm-action` | No, but that flag asks |
 
 ## Limitations
 
 - **The guard is a seatbelt, not a sandbox.** It matches text in Bash commands, so it stops accidents and page-driven injection, not deliberately disguised commands. Turning off the Chrome setting above is the real off switch.
-- **Prompt injection is not fully solved.** The skill tells Claude to treat page content as data, and no hook can enforce that. `open`, `goto` and `fill` do refuse text copied verbatim from a page on another site until you approve it, but a paraphrase or a short secret still gets through.
+- **Prompt injection is not fully solved.** The skill tells Claude to treat page content as data, and no hook can enforce that. `open`, `goto` and `fill` do refuse text copied verbatim from a page on another site until you approve it, but a paraphrase or a short secret still gets through. Inside your policy a malicious page could steer a click or a fill that nobody reviews, and the check for hard-to-undo buttons only reads their words.
 - **One Chrome at a time.** AppleScript cannot choose between Chrome processes, so tabsteward stops if a second one is running, such as one started by chrome-devtools-mcp.
 - **Profile detection is inferred** from session files. Windows it cannot identify stay hidden and refused. A close call between two profiles stays hidden too, until you confirm it.
 - **Clicks are scripted.** Sites that require a real user gesture can ignore them, and native dialogs need you. `click` reports whether the page visibly changed and whether a dialog stopped the tab, but Claude still has to check the result.

@@ -1,6 +1,7 @@
 import base64
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -266,11 +267,80 @@ class Policy(unittest.TestCase):
             chrome.gate(a)
 
 
+class Sensitive(unittest.TestCase):
+    pol = {"profiles": ["P1"], "allow_js": False, "allow_domains": [], "ask_sensitive": True}
+    words = re.compile(chrome.SENSITIVE.replace(r"[\p{L}\p{N}]", r"\w"), re.IGNORECASE)
+
+    def click(self, reply, **kw):
+        a = SimpleNamespace(**{"tab": "7", "selector": "#b", "within": None, "expect": None, "cursor": False,
+                               "confirm_action": False, **kw})
+        with patch.object(chrome, "policy", return_value=self.pol), patch.object(chrome, "js_json", return_value=reply) as js:
+            return chrome.cmd_click(a), js.call_args[0][1]
+
+    def close(self, opened, **kw):
+        a = SimpleNamespace(**{"cmd": "close", "tab": "7", "confirm_action": False, **kw})
+        with tempfile.TemporaryDirectory() as d, patch.object(chrome, "OPENED", Path(d) / "opened.json"), \
+             patch.object(chrome, "policy", return_value=kw.get("pol", self.pol)), \
+             patch.object(chrome, "require_single_chrome"), patch.object(chrome, "authorize", return_value="https://a.b/"):
+            if opened:
+                chrome.note_opened("7")
+            chrome.gate(a)
+
+    def test_words_catch_hard_to_undo_buttons(self):
+        for text in ("Delete account", "Pay now", "Thanh toán", "Xóa", "Xoá tài khoản", "Gửi", "Post", "Đăng bài", "SEND"):
+            self.assertTrue(self.words.search(text), text)
+
+    def test_words_leave_ordinary_buttons_alone(self):
+        for text in ("Đăng nhập", "Đăng ký", "Đăng xuất", "PayPal", "Postcode", "Sender", "Sign in", "Next", "Search"):
+            self.assertIsNone(self.words.search(text), text)
+
+    def test_sensitive_click_refused(self):
+        with self.assertRaisesRegex(chrome.Fail, "--confirm-action"):
+            self.click({"clicked": False, "reason": "sensitive"})
+
+    def test_confirming_a_harmless_click_refused(self):
+        with self.assertRaisesRegex(chrome.Fail, "nothing to confirm"):
+            self.click({"clicked": False, "reason": "nothing to confirm"}, confirm_action=True)
+
+    def test_check_is_off_when_setup_says_so(self):
+        with patch.object(self, "pol", {**self.pol, "ask_sensitive": False}):
+            self.assertIn("stop = false", self.click({"clicked": False, "reason": "no match"})[1])
+
+    def test_closing_a_tab_tabsteward_opened_passes(self):
+        self.close(opened=True)
+
+    def test_closing_someone_elses_tab_refused(self):
+        with self.assertRaisesRegex(chrome.Fail, "--confirm-action"):
+            self.close(opened=False)
+        self.close(opened=False, confirm_action=True)
+
+    def test_confirming_a_tab_tabsteward_opened_refused(self):
+        with self.assertRaisesRegex(chrome.Fail, "nothing to confirm"):
+            self.close(opened=True, confirm_action=True)
+
+    def test_opened_record_expires_and_survives_damage(self):
+        with tempfile.TemporaryDirectory() as d, patch.object(chrome, "OPENED", Path(d) / "opened.json"):
+            chrome.OPENED.write_text("not json")
+            self.assertEqual(chrome.opened_tabs(), {})
+            chrome.OPENED.write_text(json.dumps({"7": 1}))
+            self.assertEqual(chrome.opened_tabs(), {})
+            chrome.note_opened("8")
+            self.assertIn("8", chrome.opened_tabs())
+            self.assertEqual(chrome.OPENED.stat().st_mode & 0o777, 0o600)
+
+    def test_old_policy_keeps_asking(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "policy.json"
+            path.write_text('{"profiles": ["P1"]}')
+            with patch.object(chrome, "POLICY", path):
+                self.assertIs(chrome.policy()["ask_sensitive"], True)
+
+
 class Setup(unittest.TestCase):
     known = [{"dir": "P1", "name": "A", "email": "a@x"}]
 
     def run_set(self, tmp, **kw):
-        args = SimpleNamespace(**{"profile": ["P1"], "domain": [], "allow_js": False, **kw})
+        args = SimpleNamespace(**{"profile": ["P1"], "domain": [], "allow_js": False, "ask_sensitive": True, **kw})
         with patch.object(chrome, "profiles", return_value=self.known), patch.object(chrome, "CONFIG", tmp), \
              patch.object(chrome, "POLICY", tmp / "policy.json"):
             return chrome.cmd_set_policy(args)
@@ -280,7 +350,7 @@ class Setup(unittest.TestCase):
             tmp = Path(d) / "new"
             self.run_set(tmp, domain=["X.com"])
             self.assertEqual(json.loads((tmp / "policy.json").read_text()),
-                             {"profiles": ["P1"], "allow_js": False, "allow_domains": ["x.com"]})
+                             {"profiles": ["P1"], "allow_js": False, "allow_domains": ["x.com"], "ask_sensitive": True})
             self.assertEqual((tmp / "policy.json").stat().st_mode & 0o777, 0o600)
 
     def test_grant_is_single_use(self):
@@ -348,15 +418,23 @@ class Guard(unittest.TestCase):
                     "echo 'tell application \"Google Chrome\" to quit' | osascript"):
             self.assertEqual(self.run_guard("Bash", command=cmd), "deny", cmd)
 
-    def test_mutating_asks(self):
+    def test_commands_inside_the_policy_run_without_asking(self):
         for sub in ("open https://a.b --profile V", "click 1 '#b'", "fill 1 '#a' x", "js 1 --code x", "close 1", "goto 1 https://a.b"):
-            self.assertEqual(self.run_guard("Bash", command=f"python3 /x/scripts/chrome.py {sub}"), "ask", sub)
+            cmd = f"python3 /x/scripts/chrome.py {sub}"
+            self.assertIsNone(self.run_guard("Bash", command=cmd), sub)
+            self.assertEqual(self.run_guard("Bash", mode="bypassPermissions", command=cmd), "deny", sub)
 
     def test_spelling_does_not_dodge_the_gate(self):
         for cmd in ("python3 /x/scripts/chrome.py 'click' 1 a", 'python3 /x/scripts/chrome.py "fill" 1 a b',
-                    "python3 /x/scripts/chrome.py \\\n  click 1 a", "python3 /x/scripts/CHROME.PY click 1 a",
-                    "python3 /x/scripts/chrome.py 'set-policy' --profile P1"):
-            self.assertEqual(self.run_guard("Bash", env={"HOME": "/nonexistent"}, command=cmd), "ask", cmd)
+                    "python3 /x/scripts/chrome.py \\\n  click 1 a", "python3 /x/scripts/CHROME.PY click 1 a"):
+            self.assertEqual(self.run_guard("Bash", mode="bypassPermissions", command=cmd), "deny", cmd)
+        cmd = "python3 /x/scripts/chrome.py 'set-policy' --profile P1"
+        self.assertEqual(self.run_guard("Bash", env={"HOME": "/nonexistent"}, command=cmd), "ask", cmd)
+
+    def test_confirming_an_action_needs_a_person(self):
+        for cmd in ("python3 /x/scripts/chrome.py click 7 a --confirm-action", "python3 /x/scripts/chrome.py close 7 '--confirm-action'"):
+            self.assertEqual(self.run_guard("Bash", command=cmd), "ask", cmd)
+            self.assertEqual(self.run_guard("Bash", mode="bypassPermissions", command=cmd), "deny", cmd)
 
     def test_confirming_a_window_needs_a_person(self):
         for cmd in ("python3 /x/scripts/chrome.py read 7 --confirm-window 1", "python3 /x/scripts/chrome.py windows --confirm-window=1",
@@ -543,16 +621,18 @@ class ClickEffect(unittest.TestCase):
             self.assertEqual(chrome.click_effect("1", self.before), "navigated")
 
     def test_blocked_click_is_reported_not_raised(self):
-        a = SimpleNamespace(tab="1", selector="#b", within=None, expect=None, cursor=False)
+        a = SimpleNamespace(tab="1", selector="#b", within=None, expect=None, cursor=False, confirm_action=False)
         done = {"clicked": True, "text": "x", "before": self.before}
-        with patch.object(chrome, "js_json", return_value=done), patch.object(chrome, "click_effect", return_value="blocked"):
+        with patch.object(chrome, "js_json", return_value=done), patch.object(chrome, "click_effect", return_value="blocked"), \
+             patch.object(chrome, "policy", return_value={"ask_sensitive": True}):
             result = chrome.cmd_click(a)
         self.assertEqual(result["effect"], "blocked")
         self.assertNotIn("before", result)
 
     def test_refused_click_has_no_effect_check(self):
-        a = SimpleNamespace(tab="1", selector="#b", within=None, expect=None, cursor=False)
+        a = SimpleNamespace(tab="1", selector="#b", within=None, expect=None, cursor=False, confirm_action=False)
         with patch.object(chrome, "js_json", return_value={"clicked": False, "reason": "disabled"}), \
+             patch.object(chrome, "policy", return_value={"ask_sensitive": True}), \
              patch.object(chrome, "click_effect") as effect:
             chrome.cmd_click(a)
         effect.assert_not_called()

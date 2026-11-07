@@ -1,5 +1,5 @@
 {
-  "description": "tabsteward guard: blocks raw Chrome access, asks before browser changes, protects the policy.",
+  "description": "tabsteward guard: blocks raw Chrome access, asks when a --confirm flag is used, protects the policy.",
   "hooks": {
     "PreToolUse": [
       {
