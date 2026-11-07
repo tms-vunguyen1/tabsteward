@@ -35,7 +35,7 @@ That access is powerful, so nothing runs until you choose what is allowed. You p
 
 - **Your real browser.** Open tabs, read pages, click and fill forms in the windows you already use.
 - **Default deny.** No policy means no access, and profiles you did not allow stay out of reach.
-- **Prompts only when they matter.** You are asked before page data goes to another site, before buttons such as delete, pay, send or post, and before Claude closes a tab it did not open. You can turn off that last group in setup.
+- **Prompts only when they matter.** You are asked before page data goes to another site, and before Claude uses a window whose profile is uncertain. Everything else inside your policy runs without asking, so ask Claude for what you want done.
 - **A visible cursor.** Ask to watch and a labelled cursor shows what is about to be clicked.
 - **An audit trail.** Every attempted change is logged locally, without the text you typed.
 - **No dependencies.** It only needs Python's standard library and macOS AppleScript.
@@ -59,7 +59,7 @@ Claude starts setup the first time you ask for something in your browser, or you
 /tabsteward:setup
 ```
 
-Setup lists the Chrome profiles on your machine, then asks which ones Claude may use, whether to limit it to specific sites, whether to allow arbitrary JavaScript, and whether to ask before hard-to-undo actions. You approve the result in a prompt.
+Setup lists the Chrome profiles on your machine, then asks which ones Claude may use, whether to limit it to specific sites, and whether to allow arbitrary JavaScript. You approve the result in a prompt.
 
 > [!IMPORTANT]
 > Claude clicks and types without asking inside what you allow here. With any site allowed, that covers every site you are logged in to in that profile, so a list of sites and a low-stakes profile are safer.
@@ -86,7 +86,7 @@ flowchart LR
     B -- browser command --> D{Policy}
     D -- outside your rules --> X
     D -- allowed --> E[Your Chrome]
-    D -- page data to another site, or hard to undo --> C[You approve]
+    D -- page data to another site --> C[You approve]
     C --> E
     E --> F[(Audit log)]
 ```
@@ -108,9 +108,7 @@ Setup writes `~/.config/tabsteward/policy.json`, which stays on your machine. Yo
 {
   "profiles": ["Profile 3"],
   "allow_js": false,
-  "allow_domains": ["example.com"],
-  "ask_sensitive": true,
-  "sensitive_words": []
+  "allow_domains": ["example.com"]
 }
 ```
 
@@ -119,8 +117,6 @@ Setup writes `~/.config/tabsteward/policy.json`, which stays on your machine. Yo
 | `profiles` | Profile folders Claude may touch, listed in `chrome://version` under "Profile Path". |
 | `allow_js` | Whether arbitrary JavaScript may run. Leave this off unless you need it. |
 | `allow_domains` | Allowed sites. `example.com` also covers subdomains. Empty means any web domain. |
-| `ask_sensitive` | Whether to ask before buttons that look hard to undo and before closing tabs Claude did not open. Missing means `true`. |
-| `sensitive_words` | Extra button words to ask about, added to the built-in English list. Use it for other languages, such as `"löschen"`. |
 
 ## Commands
 
@@ -135,15 +131,15 @@ Claude runs these for you through the skill.
 | `open URL --profile NAME` | Open a tab in an existing window. Text copied from a page on another site needs `--confirm-page-data`, also for `goto` and `fill` | No, but that flag asks |
 | `goto TAB URL` | Navigate a tab | No, but that flag asks |
 | `activate TAB` | Bring a tab forward | No |
-| `click TAB SELECTOR [--expect T] [--within S] [--cursor]` | Click an element. A button that looks hard to undo needs `--confirm-action` | No, but that flag asks |
+| `click TAB SELECTOR [--expect T] [--within S] [--cursor]` | Click an element | No |
 | `fill TAB SELECTOR TEXT` | Fill a field and read it back | No, but that flag asks |
 | `js TAB --code JS` | Run custom JavaScript, off by default | No |
-| `close TAB` | Close one tab. A tab Claude did not open needs `--confirm-action` | No, but that flag asks |
+| `close TAB` | Close one tab | No |
 
 ## Limitations
 
 - **The guard is a seatbelt, not a sandbox.** It matches text in Bash commands, so it stops accidents and page-driven injection, not deliberately disguised commands. Turning off the Chrome setting above is the real off switch.
-- **Prompt injection is not fully solved.** The skill tells Claude to treat page content as data, and no hook can enforce that. `open`, `goto` and `fill` do refuse text copied verbatim from a page on another site until you approve it, but a paraphrase or a short secret still gets through. `read` also warns Claude about wording aimed at an AI, and after such wording in hidden text, `chrome.py` holds back data going to other sites for 30 minutes. Both match set wording, so they miss a lot. Inside your policy a malicious page could steer a click or a fill that nobody reviews, and the check for hard-to-undo buttons only reads their words.
+- **Prompt injection is not fully solved.** The skill tells Claude to treat page content as data, and no hook can enforce that. `open`, `goto` and `fill` do refuse text copied verbatim from a page on another site until you approve it, but a paraphrase or a short secret still gets through. `read` also warns Claude about wording aimed at an AI, and after such wording in hidden text, `chrome.py` holds back data going to other sites for 30 minutes. Both match set wording, so they miss a lot. Inside your policy a malicious page could steer a click, such as delete or pay, that nobody reviews: nothing in code checks what a button does.
 - **One Chrome at a time.** AppleScript cannot choose between Chrome processes, so tabsteward stops if a second one is running, such as one started by chrome-devtools-mcp.
 - **Profile detection is inferred** from session files. Windows it cannot identify stay hidden and refused. A close call between two profiles stays hidden too, until you confirm it.
 - **Clicks are scripted.** Sites that require a real user gesture can ignore them, and native dialogs need you. `click` reports whether the page visibly changed and whether a dialog stopped the tab, but Claude still has to check the result.
